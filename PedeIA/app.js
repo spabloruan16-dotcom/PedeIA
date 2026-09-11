@@ -1,63 +1,1451 @@
-const app = document.querySelector('#app');
+﻿const app = document.querySelector('#app');
 const toast = document.querySelector('#toast');
-const stateKey = 'pedeia-state-v3';
+const stateKey = 'pedeia-state-v5';
 const sessionKey = 'pedeia-merchant-session';
-const emptyState = { view: 'dashboard', merchant: null, shop: null, categories: [], products: [], orders: [], ratings: [], messages: [], cart: [] };
+const clientKey = 'pedeia-client-profile-v1';
+
+const blank = {
+  view: 'dashboard',
+  merchant: null,
+  shop: null,
+  categories: [],
+  products: [],
+  orders: [],
+  ratings: [],
+  messages: [],
+  cart: [],
+  orderQuery: '',
+  orderFilter: '',
+  delivery: {
+    pickup: true,
+    delivery: true,
+    pickupMinutes: 20,
+    deliveryMinutes: 45
+  },
+  printerConfig: {
+    mode: 'cabo',
+    deviceName: 'Impressora térmica padrão',
+    copies: 1,
+    autoPrint: true,
+    includeCustomer: true,
+    includePhone: true,
+    includeAddress: true,
+    includeItems: true,
+    includeNotes: true,
+    includePayment: true,
+    includeFooter: true,
+    footerText: 'Obrigado pela preferência!'
+  },
+  printers: [
+    { id: 'default', name: 'Impressora térmica local', type: 'cabo', status: 'Conectada', default: true }
+  ]
+};
+
 let state = readState();
 
-function readState() { try { return { ...emptyState, ...(JSON.parse(localStorage.getItem(stateKey)) || {}) }; } catch { return structuredClone(emptyState); } }
-function save() { localStorage.setItem(stateKey, JSON.stringify(state)); }
-function money(value) { return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
-function esc(value) { return String(value ?? '').replace(/[&<>\"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char])); }
-function notify(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(notify.timer); notify.timer = setTimeout(() => toast.classList.remove('show'), 2500); }
-function saveRender() { save(); render(); }
-function slug(value) { return String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'minha-loja'; }
-function shopLink() { return `${location.origin}${location.pathname}?loja=${encodeURIComponent(state.shop.publicId)}`; }
-function publicShop() { return new URLSearchParams(location.search).get('loja'); }
-function loggedIn() { return sessionStorage.getItem(sessionKey) === 'active'; }
-function brand() { return '<a class="brand" href="/"><span class="brand-mark">P</span><span>Pede<span>IA</span></span></a>'; }
-function render() { if (publicShop() !== null) return publicShop() === state.shop?.publicId ? shopView() : missingView(); if (!loggedIn() || !state.merchant || !state.shop) return authView(); dashboard(); }
+function readState() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(stateKey) || 'null');
+    return { ...blank, ...(stored || {}) };
+  } catch {
+    return structuredClone(blank);
+  }
+}
+
+function save() {
+  localStorage.setItem(stateKey, JSON.stringify(state));
+}
+
+function money(value) {
+  return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]));
+}
+
+function notify(message) {
+  if (!toast) return;
+  toast.textContent = message;
+  toast.classList.add('show');
+  clearTimeout(notify.timer);
+  notify.timer = setTimeout(() => toast.classList.remove('show'), 2600);
+}
+
+function renderSaved() {
+  save();
+  render();
+}
+
+function slug(value) {
+  return String(value || 'minha-loja')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'minha-loja';
+}
+
+function shopLink() {
+  if (!state.shop || !state.shop.publicId) return location.origin + location.pathname;
+  return `${location.origin}${location.pathname}?loja=${encodeURIComponent(state.shop.publicId)}`;
+}
+
+function publicShop() {
+  return new URLSearchParams(location.search).get('loja');
+}
+
+function merchantLogged() {
+  return sessionStorage.getItem(sessionKey) === 'active';
+}
+
+function brand() {
+  return '<a class="brand" href="/"><span class="brand-mark">P</span><span class="brand-word"><span class="brand-pede">Pede</span><span class="brand-ia">IA</span></span></a>';
+}
+
+function ensureDemoData() {
+  if (state.merchant || state.shop) return;
+  state.merchant = {
+    name: 'João da Silva',
+    email: 'joao@exemplo.com',
+    password: '123456'
+  };
+  state.shop = {
+    name: 'Brasa & Massa',
+    type: 'Hamburgueria',
+    publicId: 'brasa-massa-demo',
+    description: 'Hamburgueres artesanais, porções e bebidas para quem curte sabor de verdade.',
+    photo: '',
+    isOpen: true
+  };
+  state.categories = ['Lanches', 'Porções', 'Bebidas'];
+  state.products = [
+    { id: 1, name: 'X-Bacon', category: 'Lanches', description: 'Pão, burger, bacon, queijo e molho da casa.', price: 32.9, available: true, photo: '' },
+    { id: 2, name: 'Batata Chedar', category: 'Porções', description: 'Porção crocante com cheddar e cebola.', price: 24.5, available: true, photo: '' },
+    { id: 3, name: 'Refrigerante 600ml', category: 'Bebidas', description: 'Escolha seu sabor favorito.', price: 8.5, available: true, photo: '' }
+  ];
+  save();
+}
+
+function render() {
+  const lojaParam = publicShop();
+  if (lojaParam !== null) {
+    return lojaParam === state.shop?.publicId ? customerShop() : missingShop();
+  }
+  ensureDemoData();
+  if (!merchantLogged() || !state.merchant || !state.shop) return authView();
+  merchantPanel();
+}
 
 function authView() {
-  app.innerHTML = `<main class="auth-screen"><div class="auth-art">${brand()}<div class="art-copy"><span class="eyebrow">PARA QUEM FAZ ACONTECER</span><h1>Seu negócio.<br><em>Do seu jeito.</em></h1><p>Organize sua loja, receba pedidos e deixe cada cliente com vontade de voltar.</p><div class="art-orbit"><span>?x?</span><span>?x</span><span>?S?</span></div></div></div><section class="auth-card"><span class="eyebrow">PAINEL DO COMERCIANTE</span><h2>Vamos começar?</h2><p>Crie sua conta e coloque sua loja no ar.</p><div class="auth-tabs"><button class="selected" data-auth="register">Criar conta</button><button data-auth="login">Entrar</button></div><form id="register-form" class="auth-form"><label>Seu nome<input name="name" required placeholder="Como podemos chamar você?"></label><label>E-mail<input name="email" type="email" required placeholder="voce@email.com"></label><label>Senha<input name="password" type="password" minlength="6" required placeholder="Mínimo de 6 caracteres"></label><label>Nome do comércio<input name="shopName" required placeholder="Ex.: Brasa & Massa"></label><label>Tipo de comércio<select name="shopType"><option>Restaurante</option><option>Lanchonete</option><option>Hamburgueria</option><option>Pizzaria</option><option>Loja</option><option>Outro comércio</option></select></label><button class="primary-button auth-submit">Criar minha conta ? </button></form><form id="login-form" class="auth-form hidden"><label>E-mail<input name="email" type="email" required placeholder="voce@email.com"></label><label>Senha<input name="password" type="password" required placeholder="Sua senha"></label><button class="primary-button auth-submit">Entrar no painel ? </button></form><p class="auth-note">O cliente não cria conta. Ele acessa sua loja pelo link exclusivo.</p></section></main>`;
-  document.querySelectorAll('[data-auth]').forEach(button => button.onclick = () => switchAuth(button.dataset.auth));
-  document.querySelector('#register-form').onsubmit = register;
-  document.querySelector('#login-form').onsubmit = login;
-}
-function switchAuth(type) { document.querySelectorAll('[data-auth]').forEach(button => button.classList.toggle('selected', button.dataset.auth === type)); document.querySelector('#register-form').classList.toggle('hidden', type !== 'register'); document.querySelector('#login-form').classList.toggle('hidden', type !== 'login'); }
-function register(event) { event.preventDefault(); if (state.merchant) return notify('Esta demonstração já possui uma conta. Entre com seus dados.'); const data = new FormData(event.currentTarget); const shopName = String(data.get('shopName')).trim(); const shopSlug = slug(shopName); state.merchant = { name: String(data.get('name')).trim(), email: String(data.get('email')).trim().toLowerCase(), password: data.get('password') }; state.shop = { name: shopName, type: data.get('shopType'), publicId: `${shopSlug}-${Math.random().toString(36).slice(2, 7)}`, description: 'Adicione uma descrição para apresentar seu comércio.', photo: null, isOpen: true }; state.categories = []; state.products = []; state.orders = []; state.ratings = []; state.messages = []; sessionStorage.setItem(sessionKey, 'active'); saveRender(); notify('Conta criada. Agora personalize sua loja.'); }
-function login(event) { event.preventDefault(); const data = new FormData(event.currentTarget); if (!state.merchant || String(data.get('email')).trim().toLowerCase() !== state.merchant.email || data.get('password') !== state.merchant.password) return notify('E-mail ou senha inválidos.'); sessionStorage.setItem(sessionKey, 'active'); render(); }
+  app.innerHTML = `
+    <main class="auth-screen">
+      <div class="auth-art">
+        ${brand()}
+        <div class="art-copy">
+          <span class="eyebrow">PARA QUEM FAZ ACONTECER</span>
+          <h1>Seu negocio.<br><em>Do seu jeito.</em></h1>
+          <p>Uma central bonita para vender, organizar pedidos e conversar com quem escolheu sua loja.</p>
+          <div class="art-tiles">
+            <div class="art-tile burger-tile"></div>
+            <div class="art-tile drink-tile"></div>
+            <div class="art-tile chart-tile"></div>
+          </div>
+        </div>
+      </div>
+      <section class="auth-card">
+        <span class="eyebrow">PAINEL DO COMERCIANTE</span>
+        <h2>Vamos comecar?</h2>
+        <p>Crie sua conta e coloque sua loja no ar.</p>
+        <div class="auth-tabs">
+          <button class="selected" data-auth="register">Criar conta</button>
+          <button data-auth="login">Entrar</button>
+        </div>
 
-function nav(view, icon, text, count = '') { return `<button class="${state.view === view ? 'active' : ''}" data-view="${view}"><span>${icon}</span>${text}${count !== '' ? `<b>${count}</b>` : ''}</button>`; }
-function dashboard() {
-  const revenue = state.orders.reduce((sum, order) => sum + order.total, 0); const rating = state.ratings.length ? (state.ratings.reduce((sum, item) => sum + item.value, 0) / state.ratings.length).toFixed(1) : '?';
+        <form id="register-form" class="auth-form">
+          <label>Seu nome<input name="name" required placeholder="Como podemos chamar voce?"></label>
+          <label>E-mail<input name="email" type="email" required placeholder="voce@email.com"></label>
+          <label>Senha<input name="password" type="password" minlength="6" required placeholder="Minimo de 6 caracteres"></label>
+          <label>Nome do comercio<input name="shopName" required placeholder="Ex.: Brasa & Massa"></label>
+          <label>Tipo de comercio<select name="shopType"><option>Restaurante</option><option>Lanchonete</option><option>Hamburgueria</option><option>Pizzaria</option><option>Loja</option><option>Outro comercio</option></select></label>
+          <button class="primary-button auth-submit">Criar minha conta <b>-></b></button>
+        </form>
+
+        <form id="login-form" class="auth-form hidden">
+          <label>E-mail<input name="email" type="email" required placeholder="voce@email.com"></label>
+          <label>Senha<input name="password" type="password" required placeholder="Sua senha"></label>
+          <button class="primary-button auth-submit">Entrar no painel <b>-></b></button>
+        </form>
+
+        <p class="auth-note">O cliente pode pedir sem cadastro. Se criar uma conta, seus dados ficam disponiveis em outros dispositivos quando o banco estiver conectado.</p>
+      </section>
+    </main>
+  `;
+
+  document.querySelectorAll('[data-auth]').forEach((button) => {
+    button.onclick = () => switchAuth(button.dataset.auth);
+  });
+  document.querySelector('#register-form').onsubmit = registerMerchant;
+  document.querySelector('#login-form').onsubmit = loginMerchant;
+}
+
+function switchAuth(type) {
+  document.querySelectorAll('[data-auth]').forEach((button) => {
+    button.classList.toggle('selected', button.dataset.auth === type);
+  });
+  document.querySelector('#register-form').classList.toggle('hidden', type !== 'register');
+  document.querySelector('#login-form').classList.toggle('hidden', type !== 'login');
+}
+
+function registerMerchant(event) {
+  event.preventDefault();
+  const data = new FormData(event.currentTarget);
+  const shopName = String(data.get('shopName') || '').trim();
+  const email = String(data.get('email') || '').trim().toLowerCase();
+  const password = String(data.get('password') || '');
+
+  if (!shopName || !email || password.length < 6) {
+    notify('Preencha todos os campos com dados validos.');
+    return;
+  }
+
+  state.merchant = {
+    name: String(data.get('name') || '').trim(),
+    email,
+    password
+  };
+
+  state.shop = {
+    name: shopName,
+    type: String(data.get('shopType') || 'Loja'),
+    publicId: `${slug(shopName)}-${Math.random().toString(36).slice(2, 7)}`,
+    description: 'Adicione uma descricao para apresentar seu comercio.',
+    photo: '',
+    isOpen: true
+  };
+
+  state.categories = [];
+  state.products = [];
+  state.orders = [];
+  state.ratings = [];
+  state.messages = [];
+  state.cart = [];
+  state.orderQuery = '';
+  state.orderFilter = '';
+  state.delivery = { pickup: true, delivery: true, pickupMinutes: 20, deliveryMinutes: 45 };
+
+  sessionStorage.setItem(sessionKey, 'active');
+  renderSaved();
+  notify('Conta criada. Agora personalize sua loja.');
+}
+
+function loginMerchant(event) {
+  event.preventDefault();
+  const data = new FormData(event.currentTarget);
+  const email = String(data.get('email') || '').trim().toLowerCase();
+  const password = String(data.get('password') || '');
+
+  if (!state.merchant || email !== state.merchant.email || password !== state.merchant.password) {
+    notify('E-mail ou senha invalidos.');
+    return;
+  }
+
+  sessionStorage.setItem(sessionKey, 'active');
+  render();
+}
+
+function nav(view, icon, text, count = '') {
+  return `<button class="${state.view === view ? 'active' : ''}" data-view="${view}"><span class="nav-icon ${icon}"></span>${text}${count !== '' ? `<b>${count}</b>` : ''}</button>`;
+}
+
+function merchantPanel() {
   const page = state.view;
-  app.innerHTML = `<div class="shell"><aside class="sidebar">${brand()}<div class="shop-mini"><div class="shop-avatar">${state.shop.photo ? `<img src="${state.shop.photo}" alt="">` : esc(state.shop.name[0])}</div><div><strong>${esc(state.shop.name)}</strong><small>${state.shop.isOpen ? ' Aberta agora' : '?9 Fechada'}</small></div><button class="toggle-store ${state.shop.isOpen ? 'on' : 'off'}" data-action="toggle-open"><span></span></button></div><div class="persistent-link"><div><span>LINK DA SUA LOJA</span><strong>${esc(shopLink().replace(/^https?:\/\//, ''))}</strong></div><button data-action="copy">?x</button></div><nav class="side-nav">${nav('dashboard', '?R', 'Visão geral')}${nav('orders', '', 'Pedidos', state.orders.length)}${nav('menu', '', 'Cardápio')}${nav('categories', '+', 'Categorias')}${nav('chat', '?R', 'Conversas')}${nav('settings', '?a"', 'Minha loja')}</nav><div class="sidebar-bottom"><button class="help-link" data-action="copy">?  Compartilhar loja</button><div class="profile-chip"><div class="profile-photo">${esc(state.merchant.name.slice(0, 2).toUpperCase())}</div><div><strong>${esc(state.merchant.name)}</strong><small>Comerciante</small></div><button class="logout-link" data-action="logout">Sair</button></div></div></aside><main class="main-content"><header class="topbar"><div class="breadcrumb">PedeIA <span>/</span> ${page}</div><button class="outline-button" data-action="open-shop">?  Ver minha loja</button></header>${page === 'dashboard' ? home(revenue, rating) : page === 'orders' ? orders() : page === 'menu' ? menu() : page === 'categories' ? categories() : page === 'chat' ? chat() : settings()}</main></div>`;
-  bindDashboard();
+  const revenue = state.orders.filter((order) => order.createdAt && order.createdAt > Date.now() - 86400000).reduce((sum, order) => sum + Number(order.total || 0), 0);
+
+  app.innerHTML = `
+    <div class="shell">
+      <aside class="sidebar">
+        ${brand()}
+        <div class="shop-mini">
+          <div class="shop-avatar">${state.shop.photo ? `<img src="${state.shop.photo}" alt="">` : esc(state.shop.name[0])}</div>
+          <div>
+            <strong>${esc(state.shop.name)}</strong>
+            <small>${state.shop.isOpen ? 'Aberta agora' : 'Fechada'}</small>
+          </div>
+          <button class="toggle-store ${state.shop.isOpen ? 'on' : 'off'}" data-action="toggle-open"><span></span></button>
+        </div>
+
+        <div class="persistent-link">
+          <div>
+            <span>LINK DA SUA LOJA</span>
+            <strong>${esc(shopLink().replace(/^https?:\/\//, ''))}</strong>
+          </div>
+          <button data-action="copy">Copiar</button>
+        </div>
+
+        <nav class="side-nav">
+          ${nav('orders', 'orders', 'Pedidos', state.orders.length)}
+          ${nav('dashboard', 'home', 'Visao geral')}
+          ${nav('menu', 'menu', 'Cardapio')}
+          ${nav('categories', 'categories', 'Categorias')}
+          ${nav('chat', 'chat', 'Conversas')}
+          ${nav('printers', 'settings', 'Impressoras')}
+          ${nav('settings', 'settings', 'Minha loja')}
+        </nav>
+
+        <div class="sidebar-bottom">
+          <button class="help-link" data-action="copy">Compartilhar loja</button>
+          <div class="profile-chip">
+            <div class="profile-photo">${esc(state.merchant.name.slice(0, 2).toUpperCase())}</div>
+            <div>
+              <strong>${esc(state.merchant.name)}</strong>
+              <small>Comerciante</small>
+            </div>
+            <button class="logout-link" data-action="logout">Sair</button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="breadcrumb">PedeIA <span>/</span> ${page}</div>
+          <button class="outline-button" data-action="open-shop">Ver minha loja</button>
+        </header>
+
+        ${page === 'orders' ? orderBoard() : page === 'dashboard' ? overview(revenue) : page === 'menu' ? menuView() : page === 'categories' ? categoryView() : page === 'chat' ? chatView() : page === 'printers' ? printersView() : settingsView()}
+      </main>
+      <button class="quick-chat-fab" data-action="quick-chat" aria-label="Abrir conversas">💬</button>
+    </div>
+  `;
+
+  bindMerchant();
 }
-function empty(title, text) { return `<div class="empty-panel"><span>?S?</span><strong>${title}</strong><small>${text}</small></div>`; }
-function home(revenue, rating) { return `<section class="page-intro"><div><p class="eyebrow">PAINEL DA SUA LOJA</p><h1>Olá, ${esc(state.merchant.name.split(' ')[0])} <span>?S?</span></h1><p class="intro-copy">Tudo que acontece no seu comércio, em um só lugar.</p></div><button class="primary-button" data-action="new-product">+ Novo produto</button></section><section class="stats-grid"><article class="stat-card warm"><span>Pedidos hoje</span><strong>${state.orders.length}</strong><small>Dados dos seus pedidos</small></article><article class="stat-card"><span>Vendas hoje</span><strong>${money(revenue)}</strong><small>Total dos pedidos recebidos</small></article><article class="stat-card"><span>Itens no cardápio</span><strong>${state.products.length}</strong><small>${state.products.filter(item => item.available).length} disponíveis agora</small></article><article class="stat-card"><span>Avaliação média</span><strong>${rating}</strong><small>${state.ratings.length} avaliações reais</small></article></section><section class="dashboard-grid"><article class="panel"><div class="panel-heading"><div><h2>Pedidos recentes</h2><p>${state.orders.length ? `Você tem <b>${state.orders.length} pedidos</b> para acompanhar.` : 'Quando chegar um pedido, ele aparecerá aqui.'}</p></div><button class="text-button" data-view="orders">Ver todos ? </button></div>${state.orders.length ? state.orders.slice(-5).reverse().map(orderRow).join('') : empty('Ainda não há pedidos', 'Compartilhe o link da sua loja para começar a vender.')}</article><article class="panel link-panel"><p class="eyebrow">LINK EXCLUSIVO DA SUA LOJA</p><h2>Seu comércio a um clique.</h2><p>O cliente não cria conta. Copie e envie pelo WhatsApp.</p><div class="link-box"><span>${esc(shopLink().replace(/^https?:\/\//, ''))}</span><button data-action="copy">?x</button></div><button class="share-button" data-action="copy">?  Copiar link</button></article></section>`; }
-function orderRow(order) { return `<div class="order-row"><div class="order-number">${esc(order.id)}</div><div class="order-person"><strong>${esc(order.customer)}</strong><small>${esc(order.time || 'agora')}</small></div><strong class="order-total">${money(order.total)}</strong><span class="status">${esc(order.status)}</span><button class="row-arrow" data-action="open-chat">⬺</button></div>`; }
-function orders() { return `<section class="page-intro"><div><p class="eyebrow">PEDIDOS RECEBIDOS PELO SEU LINK</p><h1>Pedidos</h1><p class="intro-copy">Acompanhe cada cliente até a entrega.</p></div></section><section class="panel full-panel"><div class="filter-row"><div class="filter active">Todos <b>${state.orders.length}</b></div><div class="filter">Aguardando <b>${state.orders.filter(item => item.status === 'Aguardando').length}</b></div><div class="filter">Em preparo <b>${state.orders.filter(item => item.status === 'Em preparo').length}</b></div></div>${state.orders.length ? state.orders.map(order => `${orderRow(order)}<div class="order-note">${order.notes ? `Observação: ${esc(order.notes)}` : 'Sem observações'}<button class="order-action" data-action="advance-order" data-id="${order.id}">Atualizar status</button></div>`).join('') : empty('Nenhum pedido recebido', 'Os pedidos feitos pelos clientes aparecerão aqui.')}</section>`; }
-function menu() { return `<section class="page-intro"><div><p class="eyebrow">PRODUTOS E DISPONIBILIDADE</p><h1>Cardápio</h1><p class="intro-copy">Adicione fotos, descrições, preços e organize por categoria.</p></div><button class="primary-button" data-action="new-product">+ Novo produto</button></section><section class="panel full-panel"><div class="menu-toolbar"><div class="category-tabs">${state.categories.map(category => `<button>${esc(category)}</button>`).join('')}<button class="add-category" data-view="categories">+ Criar categoria</button></div><span class="muted">${state.products.length} produtos</span></div>${state.products.length ? state.products.map(product => `<div class="manage-row"><span class="manage-emoji">${product.photo ? `<img src="${product.photo}" alt="">` : product.emoji}</span><div><strong>${esc(product.name)}</strong><small>${esc(product.category)} · ${esc(product.description)}</small></div><b>${money(product.price)}</b><label class="switch"><input type="checkbox" data-product="${product.id}" ${product.available ? 'checked' : ''}><span></span></label><button class="dots" data-action="edit-product" data-id="${product.id}">?S}</button></div>`).join('') : empty('Seu cardápio está vazio', 'Crie uma categoria e adicione seu primeiro produto.')}</section>`; }
-function categories() { return `<section class="page-intro"><div><p class="eyebrow">ORGANIZE SEU CARDÁPIO</p><h1>Categorias</h1><p class="intro-copy">Crie abas para refris, sucos, hambúrgueres, tapiocas e mais.</p></div><button class="primary-button" data-action="new-category">+ Nova categoria</button></section><section class="category-layout"><article class="panel category-create"><div class="category-icon">+</div><h2>Uma categoria para cada desejo</h2><p>Ajude o cliente a encontrar o que quer.</p><button class="primary-button" data-action="new-category">Criar categoria</button></article><article class="panel">${state.categories.length ? state.categories.map((category, index) => `<div class="category-row"><span>${String(index + 1).padStart(2, '0')}</span><strong>${esc(category)}</strong><small>${state.products.filter(item => item.category === category).length} produtos</small><button data-action="remove-category" data-category="${esc(category)}">?</button></div>`).join('') : empty('Nenhuma categoria criada', 'Comece criando a primeira aba.')}</article></section>`; }
-function settings() { return `<section class="page-intro"><div><p class="eyebrow">A EXPERIENCIA COME?!A AQUI</p><h1>Minha loja</h1><p class="intro-copy">Personalize como seus clientes conhecem seu comércio.</p></div><button class="primary-button" data-action="copy">?  Copiar link</button></section><section class="settings-grid"><article class="panel shop-editor"><div class="editor-cover"><span>PedeIA</span></div><div class="editor-body"><div class="editor-avatar">${state.shop.photo ? `<img src="${state.shop.photo}" alt="">` : esc(state.shop.name[0])}</div><label>Foto da loja<input type="file" accept="image/*" data-shop-photo></label><label>Nome da loja<input data-setting="name" value="${esc(state.shop.name)}"></label><label>Tipo de comércio<input data-setting="type" value="${esc(state.shop.type)}"></label><label>Descrição<textarea data-setting="description">${esc(state.shop.description)}</textarea></label><button class="primary-button" data-action="save-shop">Salvar alterações</button></div></article><article class="panel preview-panel"><p class="eyebrow">SEU LINK PERMANENTE</p><div class="settings-link"><strong>${esc(shopLink())}</strong><button class="primary-button" data-action="copy">Copiar link</button><small>Esse link identifica somente sua loja. O cliente acessa sem cadastro.</small></div></article></section>`; }
-function chat() { return `<section class="page-intro"><div><p class="eyebrow">CONVERSE COM QUEM PEDIU</p><h1>Conversas</h1><p class="intro-copy">Tire dúvidas e acompanhe seus clientes.</p></div></section><section class="panel chat-panel"><div class="chat-header"><div class="profile-photo">C</div><strong>Clientes da sua loja</strong></div><div class="chat-messages">${state.messages.length ? state.messages.map(message => `<div class="message ${message.from === 'merchant' ? 'mine' : ''}">${esc(message.text)}<small>${esc(message.time)}</small></div>`).join('') : empty('Nenhuma conversa ainda', 'As mensagens aparecerão aqui.')}</div><form class="chat-compose"><input name="message" required placeholder="Escreva uma mensagem..."><button>Enviar</button></form></section>`; }
 
-function shopView() { const total = state.cart.reduce((sum, item) => sum + item.price * item.quantity, 0); app.innerHTML = `<div class="customer-app"><header class="customer-header">${brand()}<button class="chat-shop-button" data-action="customer-chat">?R Falar com a loja</button></header><section class="store-hero">${state.shop.photo ? `<img class="store-photo" src="${state.shop.photo}" alt="">` : `<div class="store-avatar-big">${esc(state.shop.name[0])}</div>`}<div><span class="open-pill">${state.shop.isOpen ? ' Aberta agora' : '?9 Fechada'}</span><h1>${esc(state.shop.name)}</h1><p>${esc(state.shop.description)}</p><small>${esc(state.shop.type)} · Entrega e retirada</small></div></section><nav class="customer-categories">${state.categories.map(category => `<a href="#${encodeURIComponent(category)}">${esc(category)}</a>`).join('')}</nav><main class="customer-menu">${state.categories.map(category => `<section id="${encodeURIComponent(category)}"><div class="category-heading"><h2>${esc(category)}</h2><span>${state.products.filter(item => item.category === category && item.available).length} opções</span></div><div class="customer-products">${state.products.filter(item => item.category === category && item.available).map(customerProduct).join('')}</div></section>`).join('')}${!state.categories.length ? '<div class="customer-empty"><strong>O cardápio está sendo preparado.</strong><small>Volte em breve.</small></div>' : ''}</main><button class="floating-cart ${state.cart.length ? '' : 'empty-floating'}" data-action="open-cart">?x: ${state.cart.length ? `<span>${state.cart.reduce((sum, item) => sum + item.quantity, 0)} itens</span><strong>Ver sacola</strong><b>${money(total)}</b>` : 'Sua sacola'}</button></div>`; document.querySelectorAll('[data-action]').forEach(button => button.onclick = handleAction); }
-function customerProduct(product) { return `<article class="customer-product"><div class="food-image">${product.photo ? `<img src="${product.photo}" alt="">` : product.emoji}</div><div class="customer-product-info"><h3>${esc(product.name)}</h3><p>${esc(product.description)}</p><strong>${money(product.price)}</strong></div><button class="add-food" data-action="add-cart" data-id="${product.id}">+</button></article>`; }
-function missingView() { app.innerHTML = `<main class="missing-shop">${brand()}<div><div class="missing-icon">?R</div><h1>Essa loja não foi encontrada.</h1><p>Confira se o link está completo ou peça um novo link ao comércio.</p><a class="primary-button" href="/">Voltar ao PedeIA</a></div></main>`; }
+function empty(title, text) {
+  return `<div class="empty-panel"><span class="empty-mark"></span><strong>${title}</strong><small>${text}</small></div>`;
+}
 
-function bindDashboard() { document.querySelectorAll('[data-view]').forEach(button => button.onclick = () => { state.view = button.dataset.view; saveRender(); }); document.querySelectorAll('[data-action]').forEach(button => button.onclick = handleAction); document.querySelectorAll('[data-product]').forEach(input => input.onchange = () => { state.products.find(item => String(item.id) === input.dataset.product).available = input.checked; saveRender(); }); document.querySelector('.chat-compose')?.addEventListener('submit', sendMessage); document.querySelector('[data-shop-photo]')?.addEventListener('change', event => fileData(event.target.files[0], photo => { state.shop.photo = photo; saveRender(); })); }
-function handleAction(event) { const button = event.currentTarget; const action = button.dataset.action; if (action === 'new-category') return categoryDialog(); if (action === 'new-product' || action === 'edit-product') return productDialog(button.dataset.id); if (action === 'remove-category') { state.categories = state.categories.filter(item => item !== button.dataset.category); state.products = state.products.filter(item => item.category !== button.dataset.category); return saveRender(); } if (action === 'toggle-open') { state.shop.isOpen = !state.shop.isOpen; return saveRender(); } if (action === 'save-shop') { document.querySelectorAll('[data-setting]').forEach(input => { state.shop[input.dataset.setting] = input.value.trim(); }); return saveRender(); } if (action === 'logout') { sessionStorage.removeItem(sessionKey); return render(); } if (action === 'copy' || action === 'share') return navigator.clipboard.writeText(shopLink()).then(() => notify('Link copiado para enviar no WhatsApp')); if (action === 'open-shop') return window.open(shopLink(), '_blank', 'noopener'); if (action === 'advance-order') { const order = state.orders.find(item => item.id === button.dataset.id); order.status = order.status === 'Aguardando' ? 'Em preparo' : order.status === 'Em preparo' ? 'Pronto' : 'Entregue'; return saveRender(); } if (action === 'add-cart') { const product = state.products.find(item => String(item.id) === button.dataset.id); const item = state.cart.find(entry => entry.id === product.id); if (item) item.quantity++; else state.cart.push({ ...product, quantity: 1, notes: '' }); save(); return shopView(); } if (action === 'open-cart') return cartDialog(); if (action === 'customer-chat') return customerChat(); }
-function dialog(content) { const overlay = document.createElement('div'); overlay.className = 'cart-overlay dialog-overlay'; overlay.innerHTML = `<div class="cart-modal dialog-modal"><button class="modal-close">?</button>${content}</div>`; overlay.querySelector('.modal-close').onclick = closeDialog; overlay.onclick = event => { if (event.target === overlay) closeDialog(); }; document.body.appendChild(overlay); }
-function closeDialog() { document.querySelector('.dialog-overlay')?.remove(); }
-function categoryDialog() { dialog(`<div class="dialog-head"><span class="category-icon">+</span><h2>Nova categoria</h2><p>Crie uma aba para organizar seus produtos.</p></div><form id="category-form" class="dialog-form"><label>Nome da categoria<input name="name" required placeholder="Ex.: Tapiocas"></label><button class="primary-button">Criar categoria</button></form>`); document.querySelector('#category-form').onsubmit = event => { event.preventDefault(); const name = new FormData(event.currentTarget).get('name').trim(); if (name && !state.categories.includes(name)) state.categories.push(name); closeDialog(); saveRender(); }; }
-function productDialog(id) { const product = state.products.find(item => String(item.id) === String(id)); dialog(`<div class="dialog-head"><span class="category-icon">PROD</span><h2>${product ? 'Editar produto' : 'Novo produto'}</h2><p>Preencha foto, categoria, descrição e preço.</p></div><form id="product-form" class="dialog-form"><label class="photo-picker">+<span>Adicionar foto<input name="photo" type="file" accept="image/*"></span></label><label>Nome do produto<input name="name" required value="${esc(product?.name || '')}" placeholder="Ex.: X-Bacon especial"></label><label>Categoria<select name="category" required>${state.categories.map(category => `<option ${product?.category === category ? 'selected' : ''}>${esc(category)}</option>`).join('')}</select></label><label>Descrição<textarea name="description" required placeholder="Conte os ingredientes.">${esc(product?.description || '')}</textarea></label><label>Preço<input name="price" type="number" step="0.01" min="0.01" required value="${product?.price || ''}" placeholder="0,00"></label><button class="primary-button">${product ? 'Salvar produto' : 'Adicionar ao cardápio'}</button></form>`); document.querySelector('#product-form').onsubmit = event => { event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); const finish = photo => { const next = { id: product?.id || Date.now(), name: data.get('name').trim(), category: data.get('category'), description: data.get('description').trim(), price: Number(data.get('price')), photo: photo || product?.photo || null, emoji: 'FOOD', available: product?.available ?? true }; if (product) Object.assign(product, next); else state.products.push(next); closeDialog(); saveRender(); notify('Produto salvo no cardápio'); }; const file = form.querySelector('[name=photo]').files[0]; file ? fileData(file, finish) : finish(null); }; }
-function fileData(file, callback) { if (!file) return callback(null); const reader = new FileReader(); reader.onload = () => callback(reader.result); reader.readAsDataURL(file); }
-function sendMessage(event) { event.preventDefault(); const input = event.currentTarget.elements.message; state.messages.push({ from: 'merchant', text: input.value.trim(), time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }); input.value = ''; saveRender(); }
-function cartDialog() { const total = state.cart.reduce((sum, item) => sum + item.price * item.quantity, 0); dialog(`<div class="dialog-head"><span class="category-icon">CAR</span><h2>Sua sacola</h2><p>Deixe um recado para a cozinha em cada item.</p></div><div class="cart-items">${state.cart.length ? state.cart.map(item => `<div class="cart-item"><span>${item.photo ? `<img src="${item.photo}" alt="">` : item.emoji}</span><div><strong>${esc(item.name)}</strong><small>${money(item.price)} · ${item.quantity}x</small><label class="note-field"><span>OBSERVACOES DO ITEM</span><input data-note="${item.id}" value="${esc(item.notes)}" placeholder="Ex.: sem cebola, bem passado..."><small>Opcional - a loja vera este recado no pedido</small></label></div></div>`).join('') : '<p class="empty-cart">Sua sacola está vazia.</p>'}</div>${state.cart.length ? `<div class="cart-total"><span>Total estimado</span><strong>${money(total)}</strong></div><button class="primary-button checkout-button">Continuar para entrega</button>` : ''}`); document.querySelectorAll('[data-note]').forEach(input => input.oninput = () => { state.cart.find(item => String(item.id) === input.dataset.note).notes = input.value; }); document.querySelector('.checkout-button')?.addEventListener('click', checkoutDialog); }
-function checkoutDialog() { closeDialog(); dialog(`<div class="dialog-head"><span class="category-icon">?R</span><h2>Finalizar pedido</h2><p>O cliente não precisa criar conta.</p></div><form id="checkout-form" class="dialog-form"><label>Seu nome<input name="customer" required placeholder="Como podemos chamar você?"></label><label>Endereço de entrega<input name="address" required placeholder="Rua, número e complemento"></label><label>Pagamento<select name="payment"><option>Pix</option><option>Cartão na entrega</option><option>Dinheiro</option></select></label><button class="primary-button">Enviar pedido</button></form>`); document.querySelector('#checkout-form').onsubmit = event => { event.preventDefault(); const data = new FormData(event.currentTarget); state.orders.push({ id: `#${Date.now().toString().slice(-4)}`, customer: data.get('customer'), address: data.get('address'), payment: data.get('payment'), total: state.cart.reduce((sum, item) => sum + item.price * item.quantity, 0), status: 'Aguardando', notes: state.cart.map(item => item.notes).filter(Boolean).join(' | '), time: 'agora' }); state.cart = []; save(); closeDialog(); notify('Pedido enviado para a loja!'); shopView(); }; }
-function customerChat() { dialog(`<div class="dialog-head"><span class="category-icon">?R</span><h2>Falar com a loja</h2><p>Tire uma dúvida antes de fazer seu pedido.</p></div><div class="chat-messages compact">${state.messages.map(message => `<div class="message ${message.from === 'customer' ? 'mine' : ''}">${esc(message.text)}<small>${esc(message.time)}</small></div>`).join('') || empty('Nenhuma mensagem', 'A loja ainda não enviou mensagens.')}</div><form id="customer-chat" class="chat-compose"><input name="message" required placeholder="Escreva sua dúvida..."><button>Enviar</button></form>`); document.querySelector('#customer-chat').onsubmit = event => { event.preventDefault(); const input = event.currentTarget.elements.message; state.messages.push({ from: 'customer', text: input.value.trim(), time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }); save(); closeDialog(); notify('Mensagem enviada para a loja'); }; }
+function overview(revenue) {
+  return `
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">PEDIDOS EM TEMPO REAL</p>
+        <h1>O movimento da sua loja.</h1>
+        <p class="intro-copy">Acompanhe o que esta chegando e o que precisa da sua atencao.</p>
+      </div>
+      <button class="primary-button" data-view="orders">Abrir pedidos</button>
+    </section>
+
+    <section class="stats-grid">
+      <article class="stat-card warm"><span>Pedidos hoje</span><strong>${state.orders.filter((order) => sameDay(order.createdAt)).length}</strong><small>Atualizado pelos pedidos reais</small></article>
+      <article class="stat-card"><span>Vendas hoje</span><strong>${money(revenue)}</strong><small>Somente pedidos recebidos hoje</small></article>
+      <article class="stat-card"><span>Itens no cardapio</span><strong>${state.products.length}</strong><small>${state.products.filter((item) => item.available).length} disponiveis agora</small></article>
+      <article class="stat-card"><span>Avaliacao media</span><strong>${ratingValue()}</strong><small>${state.ratings.length} avaliacoes reais</small></article>
+    </section>
+
+    <section class="panel live-preview">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">AGORA</p>
+          <h2>O que esta acontecendo</h2>
+        </div>
+        <button class="text-button" data-view="orders">Ver quadro completo</button>
+      </div>
+      <div class="live-columns">
+        <div><span class="live-title incoming">Chegando</span><strong>${countStatus('Aguardando')}</strong></div>
+        <div><span class="live-title producing">Em producao</span><strong>${countStatus('Em preparo')}</strong></div>
+        <div><span class="live-title ready">Prontos / entrega</span><strong>${countStatus('Pronto') + countStatus('Saiu para entrega')}</strong></div>
+      </div>
+    </section>
+  `;
+}
+
+function sameDay(time) {
+  if (!time) return false;
+  const date = new Date(time);
+  const now = new Date();
+  return date.toDateString() === now.toDateString();
+}
+
+function ratingValue() {
+  if (!state.ratings.length) return '-';
+  return (state.ratings.reduce((sum, item) => sum + Number(item.value || 0), 0) / state.ratings.length).toFixed(1);
+}
+
+function countStatus(status) {
+  return state.orders.filter((order) => order.status === status).length;
+}
+
+function orderBoard() {
+  const query = String(state.orderQuery || '').toLowerCase();
+  const visible = state.orders.filter((order) => {
+    const text = `${order.id} ${order.customer || ''}`.toLowerCase();
+    const matchesQuery = !query || text.includes(query);
+    const matchesFilter = !state.orderFilter || order.fulfillment === state.orderFilter;
+    return matchesQuery && matchesFilter;
+  });
+
+  return `
+    <section class="page-intro board-intro">
+      <div>
+        <p class="eyebrow">PEDIDOS EM TEMPO REAL</p>
+        <h1>Central de pedidos</h1>
+        <p class="intro-copy">Aceite, produza e finalize cada pedido sem perder o ritmo.</p>
+      </div>
+      <button class="primary-button" data-action="copy">Compartilhar loja</button>
+    </section>
+
+    <div class="board-tools">
+      <div class="search-field">
+        <span>Buscar</span>
+        <input data-order-search value="${esc(state.orderQuery || '')}" placeholder="Cliente ou numero do pedido">
+      </div>
+      <div class="filter-pills">
+        <button class="${!state.orderFilter ? 'selected' : ''}" data-filter="">Todos</button>
+        <button class="${state.orderFilter === 'delivery' ? 'selected' : ''}" data-filter="delivery">Delivery</button>
+        <button class="${state.orderFilter === 'pickup' ? 'selected' : ''}" data-filter="pickup">Retirada</button>
+      </div>
+    </div>
+
+    <section class="order-board">
+      <div class="board-column incoming-column">
+        <header><strong>Chegando</strong><b>${visible.filter((order) => order.status === 'Aguardando').length}</b></header>
+        <div class="board-list">
+          ${visible.filter((order) => order.status === 'Aguardando').map(orderCard).join('') || empty('Nada aguardando', 'Novos pedidos aparecem aqui.')}
+        </div>
+      </div>
+
+      <div class="board-column producing-column">
+        <header><strong>Em producao</strong><b>${visible.filter((order) => ['Em preparo', 'Pronto'].includes(order.status)).length}</b></header>
+        <div class="board-list">
+          ${visible.filter((order) => ['Em preparo', 'Pronto'].includes(order.status)).map(orderCard).join('') || empty('Cozinha tranquila', 'Aceite um pedido para comecar.')}
+        </div>
+      </div>
+
+      <div class="board-column delivery-column">
+        <header><strong>Finalizados</strong><b>${visible.filter((order) => ['Saiu para entrega', 'Entregue'].includes(order.status)).length}</b></header>
+        <div class="board-list">
+          ${visible.filter((order) => ['Saiu para entrega', 'Entregue'].includes(order.status)).map(orderCard).join('') || empty('Sem entregas no momento', 'Aqui ficam envios realizados.')}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function orderCard(order) {
+  const late = order.status !== 'Entregue' && Number(order.readyAt || 0) < Date.now();
+  return `
+    <article class="order-card ${late ? 'late' : ''}" data-order-id="${order.id}">
+      <div class="order-card-top">
+        <strong>${esc(order.id)}</strong>
+        <time>${remaining(order)}</time>
+      </div>
+      <div class="customer-line">
+        <span class="customer-avatar">${esc((order.customer || '?').slice(0, 1))}</span>
+        <strong>${esc(order.customer || 'Cliente')}</strong>
+        <small>${order.fulfillment === 'delivery' ? 'Entrega' : 'Retirada'}</small>
+      </div>
+      <div class="order-place">${order.fulfillment === 'delivery' ? esc(order.address || 'Endereco nao informado') : 'Retirada no local'}</div>
+      <div class="order-payment">${esc(order.payment || 'Pix')} <b>${money(order.total)}</b></div>
+      ${order.notes ? `<div class="order-observation">Observacao: ${esc(order.notes)}</div>` : ''}
+      <div class="card-actions">
+        <button class="secondary-button" data-action="open-order" data-id="${order.id}">Ver detalhes</button>
+        ${order.status === 'Aguardando' ? `<button class="primary-button" data-action="accept-order" data-id="${order.id}">Aceitar agora</button>` : order.status === 'Em preparo' ? `<button class="primary-button" data-action="advance-order" data-id="${order.id}">Avancar pedido</button>` : order.status === 'Pronto' && order.fulfillment === 'delivery' ? `<button class="primary-button" data-action="advance-order" data-id="${order.id}">Saiu para entrega</button>` : order.status !== 'Entregue' ? `<button class="primary-button" data-action="advance-order" data-id="${order.id}">Finalizar pedido</button>` : '<span class="delivered-label">Entregue</span>'}
+      </div>
+    </article>
+  `;
+}
+
+function remaining(order) {
+  if (!order) return 'Sem prazo';
+  if (order.status === 'Entregue') return 'Finalizado';
+  const readyAt = Number(order.readyAt || 0);
+  const minutes = Math.ceil((readyAt - Date.now()) / 60000);
+  return minutes < 0 ? `Atrasado ha ${Math.abs(minutes)} min` : `Faltam ${minutes} min`;
+}
+
+function orderDetails(order) {
+  const messages = state.messages.filter((msg) => msg.orderId === order.id);
+  showDialog(`
+    <div class="dialog-head">
+      <span class="category-icon">PED</span>
+      <h2>Pedido ${esc(order.id)}</h2>
+      <p>${esc(order.customer || 'Cliente')} · ${order.fulfillment === 'delivery' ? esc(order.address || 'Endereco nao informado') : 'Retirada no local'}</p>
+    </div>
+    <div class="detail-items">
+      ${(order.items || []).map((item) => `<div><strong>${item.quantity}x ${esc(item.name)}</strong><small>${esc(item.description || '')}</small></div>`).join('') || '<p>Itens registrados no pedido.</p>'}
+    </div>
+    <div class="detail-chat">
+      <strong>Conversa com este cliente</strong>
+      <div class="chat-messages compact">
+        ${messages.map((msg) => `<div class="message ${msg.from === 'merchant' ? 'mine' : ''}">${esc(msg.text)}<small>${esc(msg.time)}</small></div>`).join('') || '<small>Nenhuma mensagem neste pedido.</small>'}
+      </div>
+      <form class="inline-chat" data-order-chat="${order.id}">
+        <input name="message" required placeholder="Fale sobre este pedido">
+        <button>Enviar</button>
+      </form>
+    </div>
+  `);
+
+  document.querySelector('[data-order-chat]')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = event.currentTarget.elements.message;
+    const text = String(input.value || '').trim();
+    if (!text) return;
+    state.messages.push({
+      orderId: order.id,
+      from: 'merchant',
+      text,
+      time: nowTime(),
+      scope: 'order'
+    });
+    save();
+    closeDialog();
+    orderDetails(order);
+  });
+}
+
+function menuView() {
+  return `
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">PRODUTOS E DISPONIBILIDADE</p>
+        <h1>Cardapio</h1>
+        <p class="intro-copy">Fotos, descricoes, precos e categoria em um unico formulario.</p>
+      </div>
+      <button class="primary-button" data-action="new-product">Novo produto</button>
+    </section>
+
+    <section class="panel full-panel">
+      <div class="menu-toolbar">
+        <div class="category-tabs">
+          ${state.categories.map((category) => `<button>${esc(category)}</button>`).join('')}
+          <button class="add-category" data-view="categories">Criar categoria</button>
+        </div>
+        <span class="muted">${state.products.length} produtos</span>
+      </div>
+
+      ${state.products.length ? state.products.map((product) => `
+        <div class="manage-row">
+          <span class="manage-emoji">${product.photo ? `<img src="${product.photo}" alt="">` : '<span class="food-placeholder"></span>'}</span>
+          <div>
+            <strong>${esc(product.name)}</strong>
+            <small>${esc(product.category)} · ${esc(product.description)}</small>
+          </div>
+          <b>${money(product.price)}</b>
+          <label class="switch">
+            <input type="checkbox" data-product="${product.id}" ${product.available ? 'checked' : ''}>
+            <span></span>
+          </label>
+          <button class="dots" data-action="edit-product" data-id="${product.id}">Editar</button>
+        </div>
+      `).join('') : empty('Seu cardapio esta vazio', 'Crie uma categoria e adicione seu primeiro produto.')}
+    </section>
+  `;
+}
+
+function categoryView() {
+  return `
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">ORGANIZE SEU CARDAPIO</p>
+        <h1>Categorias</h1>
+        <p class="intro-copy">Crie abas para refris, sucos, hamburgueres, tapiocas e mais.</p>
+      </div>
+      <button class="primary-button" data-action="new-category">Nova categoria</button>
+    </section>
+
+    <section class="category-layout">
+      <article class="panel category-create">
+        <div class="category-icon">+</div>
+        <h2>Uma categoria para cada desejo</h2>
+        <p>Ajude o cliente a encontrar o que quer.</p>
+        <button class="primary-button" data-action="new-category">Criar categoria</button>
+      </article>
+
+      <article class="panel">
+        ${state.categories.length ? state.categories.map((category, index) => `
+          <div class="category-row">
+            <span>${String(index + 1).padStart(2, '0')}</span>
+            <strong>${esc(category)}</strong>
+            <small>${state.products.filter((item) => item.category === category).length} produtos</small>
+            <button data-action="remove-category" data-category="${esc(category)}">Remover</button>
+          </div>
+        `).join('') : empty('Nenhuma categoria criada', 'Comece criando a primeira aba.')}
+      </article>
+    </section>
+  `;
+}
+
+function chatView() {
+  return `
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">CONVERSE COM QUEM PEDIU</p>
+        <h1>Conversas</h1>
+        <p class="intro-copy">Cada conversa fica ligada ao pedido do cliente.</p>
+      </div>
+    </section>
+
+    <section class="panel chat-panel">
+      <div class="chat-messages">
+        ${state.messages.filter((msg) => msg.scope === 'order').map((msg) => `<div class="message ${msg.from === 'merchant' ? 'mine' : ''}"><small>Pedido ${esc(msg.orderId || '')}</small>${esc(msg.text)}<small>${esc(msg.time)}</small></div>`).join('') || empty('Nenhuma conversa ainda', 'O botao de conversar aparece em cada pedido.')}
+      </div>
+      <form class="chat-compose">
+        <input name="message" required placeholder="Selecione um pedido para responder">
+      </form>
+    </section>
+  `;
+}
+
+function printersView() {
+  const sample = sampleOrder();
+  return `
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">IMPRESSAO E COMANDAS</p>
+        <h1>Impressoras</h1>
+        <p class="intro-copy">Conecte via Bluetooth, cabo USB, rede ou uso dos modelos que a sua loja preferir.</p>
+      </div>
+      <button class="primary-button" data-action="new-printer">Adicionar impressora</button>
+    </section>
+
+    <section class="settings-grid">
+      <article class="panel shop-editor">
+        <div class="editor-cover"><span>Print</span></div>
+        <div class="editor-body">
+          <p class="eyebrow">DISPOSITIVOS CADASTRADOS</p>
+          ${state.printers.length ? state.printers.map((printer) => `
+            <div class="printer-row">
+              <div>
+                <strong>${esc(printer.name)}</strong>
+                <small>${esc(printer.type)} · ${esc(printer.status || 'Disponivel')}</small>
+              </div>
+              <button class="secondary-button" data-action="connect-printer" data-printer-id="${printer.id}">${printer.status === 'Conectada' ? 'Testar' : 'Conectar'}</button>
+            </div>
+          `).join('') : '<p class="muted">Nenhuma impressora cadastrada.</p>'}
+        </div>
+      </article>
+
+      <article class="panel operation-settings">
+        <p class="eyebrow">CONFIGURACAO DA COMANDA</p>
+        <label>Tipo de conexão<select data-printer-field="mode">
+          <option value="bluetooth" ${state.printerConfig.mode === 'bluetooth' ? 'selected' : ''}>Bluetooth</option>
+          <option value="cabo" ${state.printerConfig.mode === 'cabo' ? 'selected' : ''}>Cabo / USB</option>
+          <option value="rede" ${state.printerConfig.mode === 'rede' ? 'selected' : ''}>Rede / IP</option>
+          <option value="pdf" ${state.printerConfig.mode === 'pdf' ? 'selected' : ''}>PDF / impressão simples</option>
+        </select></label>
+        <label>Nome da impressora<input data-printer-field="deviceName" value="${esc(state.printerConfig.deviceName || '')}" placeholder="Ex.: Epson TM-T20"></label>
+        <label>Quantas vias saem<input type="number" min="1" max="10" data-printer-field="copies" value="${state.printerConfig.copies || 1}"></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="autoPrint" ${state.printerConfig.autoPrint ? 'checked' : ''}><span><strong>Imprimir automaticamente ao aceitar</strong><small>Sem precisar apertar o botão de impressão manual</small></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeCustomer" ${state.printerConfig.includeCustomer ? 'checked' : ''}><span><strong>Incluir nome do cliente</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includePhone" ${state.printerConfig.includePhone ? 'checked' : ''}><span><strong>Incluir telefone</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeAddress" ${state.printerConfig.includeAddress ? 'checked' : ''}><span><strong>Incluir dados de entrega</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeItems" ${state.printerConfig.includeItems ? 'checked' : ''}><span><strong>Incluir itens do pedido</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeNotes" ${state.printerConfig.includeNotes ? 'checked' : ''}><span><strong>Incluir observações</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includePayment" ${state.printerConfig.includePayment ? 'checked' : ''}><span><strong>Incluir forma de pagamento</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeFooter" ${state.printerConfig.includeFooter ? 'checked' : ''}><span><strong>Mostrar mensagem final</strong></span></label>
+        <label>Mensagem final<textarea data-printer-field="footerText" rows="2">${esc(state.printerConfig.footerText || '')}</textarea></label>
+        <button class="primary-button" data-action="save-printer-config">Salvar impressora</button>
+      </article>
+    </section>
+
+    <section class="panel printer-preview-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">VISUALIZACAO</p>
+          <h2>Como a comanda vai sair</h2>
+        </div>
+        <button class="secondary-button" data-action="print-test">Testar impressão</button>
+      </div>
+      <div class="receipt-preview">${buildReceiptMarkup(sample, state.printerConfig, true)}</div>
+    </section>
+  `;
+}
+
+function settingsView() {
+  return `
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">CONFIGURACAO DA OPERACAO</p>
+        <h1>Minha loja</h1>
+        <p class="intro-copy">Escolha como sua loja recebe, prepara e entrega pedidos.</p>
+      </div>
+    </section>
+
+    <section class="settings-grid">
+      <article class="panel shop-editor">
+        <div class="editor-cover"><span>PedeIA</span></div>
+        <div class="editor-body">
+          <label>Foto da loja<input type="file" accept="image/*" data-shop-photo></label>
+          <label>Nome da loja<input data-setting="name" value="${esc(state.shop.name)}"></label>
+          <label>Descricao<textarea data-setting="description">${esc(state.shop.description)}</textarea></label>
+          <button class="primary-button" data-action="save-shop">Salvar loja</button>
+        </div>
+      </article>
+
+      <article class="panel operation-settings">
+        <p class="eyebrow">FORMAS DE RECEBIMENTO</p>
+        <label class="choice-row"><input type="checkbox" data-delivery="delivery" ${state.delivery.delivery ? 'checked' : ''}><span><strong>Delivery</strong><small>Cliente recebe no endereco informado</small></span></label>
+        <label class="choice-row"><input type="checkbox" data-delivery="pickup" ${state.delivery.pickup ? 'checked' : ''}><span><strong>Retirada no local</strong><small>Cliente busca o pedido na loja</small></span></label>
+        <label>Tempo estimado para delivery<input type="number" min="1" data-delivery-min="deliveryMinutes" value="${state.delivery.deliveryMinutes}"> minutos</label>
+        <label>Tempo estimado para retirada<input type="number" min="1" data-delivery-min="pickupMinutes" value="${state.delivery.pickupMinutes}"> minutos</label>
+        <button class="primary-button" data-action="save-delivery">Salvar tempos</button>
+
+        <div class="settings-link">
+          <strong>${esc(shopLink())}</strong>
+          <button class="primary-button" data-action="copy">Copiar link</button>
+        </div>
+      </article>
+    </section>
+  `;
+}
+
+function customerShop() {
+  if (!state.shop) return missingShop();
+  const total = state.cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+  const cached = JSON.parse(localStorage.getItem(clientKey) || 'null') || {};
+  const tracked = state.orders
+    .slice()
+    .reverse()
+    .find((order) => cached.name && order.customer === cached.name);
+
+  app.innerHTML = `
+    <div class="customer-app">
+      <header class="customer-header">
+        ${brand()}
+        <button class="chat-shop-button" data-action="customer-chat">Falar com a loja</button>
+      </header>
+
+      <section class="store-hero">
+        ${state.shop.photo ? `<img class="store-photo" src="${state.shop.photo}" alt="">` : '<div class="store-avatar-big"></div>'}
+        <div>
+          <span class="open-pill">${state.shop.isOpen ? 'Aberta agora' : 'Fechada'}</span>
+          <h1>${esc(state.shop.name)}</h1>
+          <p>${esc(state.shop.description)}</p>
+          <small>${esc(state.shop.type)}</small>
+        </div>
+      </section>
+
+      ${tracked ? customerTracker(tracked) : ''}
+
+      <nav class="customer-categories">
+        ${state.categories.map((category) => `<a href="#${encodeURIComponent(category)}">${esc(category)}</a>`).join('')}
+      </nav>
+
+      <main class="customer-menu">
+        ${state.categories.length ? state.categories.map((category) => `
+          <section id="${encodeURIComponent(category)}">
+            <div class="category-heading">
+              <h2>${esc(category)}</h2>
+              <span>${state.products.filter((item) => item.category === category && item.available).length} opcoes</span>
+            </div>
+            <div class="customer-products">
+              ${state.products.filter((item) => item.category === category && item.available).map(customerProduct).join('')}
+            </div>
+          </section>
+        `).join('') : '<div class="customer-empty"><strong>O cardapio esta sendo preparado.</strong><small>Volte em breve.</small></div>'}
+      </main>
+
+      <button class="floating-cart ${state.cart.length ? '' : 'empty-floating'}" data-action="open-cart">
+        Carrinho ${state.cart.length ? `· ${state.cart.length} item(s) · ${money(total)}` : ''}
+      </button>
+    </div>
+  `;
+
+  document.querySelectorAll('[data-action]').forEach((button) => {
+    button.onclick = handleAction;
+  });
+}
+
+function customerTracker(order) {
+  const delivered = order.status === 'Entregue';
+  return `
+    <section class="customer-tracker">
+      <div>
+        <p class="eyebrow">SEU PEDIDO ${esc(order.id)}</p>
+        <h2>${statusLabel(order.status)}</h2>
+        <p>${remaining(order)} · ${order.fulfillment === 'delivery' ? 'Entrega' : 'Retirada'}</p>
+      </div>
+      <div class="tracker-steps">
+        <span class="${order.status !== 'Aguardando' ? 'done' : 'current'}">Recebido</span>
+        <span class="${['Pronto', 'Saiu para entrega', 'Entregue'].includes(order.status) ? 'done' : order.status === 'Em preparo' ? 'current' : ''}">Preparando</span>
+        <span class="${['Saiu para entrega', 'Entregue'].includes(order.status) ? 'done' : ''}">${order.fulfillment === 'delivery' ? 'A caminho' : 'Pronto'}</span>
+        <span class="${delivered ? 'done' : ''}">Finalizado</span>
+      </div>
+      ${delivered && !order.confirmed ? `<button class="primary-button" data-action="confirm-receipt" data-id="${order.id}">Confirmar que recebi</button>` : ''}
+      ${delivered ? `<button class="secondary-button" data-action="rate-order" data-id="${order.id}">Avaliar pedido</button>` : ''}
+    </section>
+  `;
+}
+
+function statusLabel(status) {
+  return {
+    Aguardando: 'Pedido recebido',
+    'Em preparo': 'A cozinha esta preparando',
+    Pronto: 'Pedido pronto',
+    'Saiu para entrega': 'Saiu para entrega',
+    Entregue: 'Pedido finalizado'
+  }[status] || status;
+}
+
+function customerProduct(product) {
+  return `
+    <article class="customer-product">
+      <div class="food-image">${product.photo ? `<img src="${product.photo}" alt="">` : '<span class="food-placeholder"></span>'}</div>
+      <div class="customer-product-info">
+        <h3>${esc(product.name)}</h3>
+        <p>${esc(product.description)}</p>
+        <strong>${money(product.price)}</strong>
+      </div>
+      <button class="add-food" data-action="add-cart" data-id="${product.id}">Adicionar</button>
+    </article>
+  `;
+}
+
+function missingShop() {
+  app.innerHTML = `
+    <main class="missing-shop">
+      ${brand()}
+      <div>
+        <div class="missing-icon">!</div>
+        <h1>Loja nao encontrada</h1>
+        <p>Confira o link recebido ou peça um novo endereco ao comercio.</p>
+        <a class="primary-button" href="/">Voltar</a>
+      </div>
+    </main>
+  `;
+}
+
+function bindMerchant() {
+  document.querySelectorAll('[data-view]').forEach((button) => {
+    button.onclick = () => {
+      state.view = button.dataset.view;
+      renderSaved();
+    };
+  });
+
+  document.querySelectorAll('[data-action]').forEach((button) => {
+    button.onclick = handleAction;
+  });
+
+  document.querySelectorAll('[data-filter]').forEach((button) => {
+    button.onclick = () => {
+      state.orderFilter = button.dataset.filter;
+      renderSaved();
+    };
+  });
+
+  document.querySelector('[data-order-search]')?.addEventListener('input', (event) => {
+    state.orderQuery = event.target.value;
+    renderSaved();
+  });
+
+  document.querySelectorAll('[data-product]').forEach((input) => {
+    input.onchange = () => {
+      const item = state.products.find((product) => String(product.id) === String(input.dataset.product));
+      if (item) {
+        item.available = input.checked;
+        renderSaved();
+      }
+    };
+  });
+
+  document.querySelector('[data-shop-photo]')?.addEventListener('change', (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    readImage(file, (image) => {
+      state.shop.photo = image;
+      renderSaved();
+    });
+  });
+}
+
+function handleAction(event) {
+  const button = event.currentTarget;
+  const action = button.dataset.action;
+
+  if (action === 'new-category') return categoryDialog();
+  if (action === 'new-product' || action === 'edit-product') return productDialog(button.dataset.id);
+  if (action === 'remove-category') {
+    const categoryName = button.dataset.category;
+    state.categories = state.categories.filter((item) => item !== categoryName);
+    state.products = state.products.filter((item) => item.category !== categoryName);
+    return renderSaved();
+  }
+  if (action === 'toggle-open') {
+    state.shop.isOpen = !state.shop.isOpen;
+    return renderSaved();
+  }
+  if (action === 'save-shop') {
+    document.querySelectorAll('[data-setting]').forEach((input) => {
+      state.shop[input.dataset.setting] = input.value.trim();
+    });
+    return renderSaved();
+  }
+  if (action === 'save-delivery') {
+    document.querySelectorAll('[data-delivery-min]').forEach((input) => {
+      state.delivery[input.dataset.deliveryMin] = Number(input.value || 0);
+    });
+    return renderSaved();
+  }
+  if (action === 'save-printer-config') {
+    const form = document.querySelector('[data-printer-field="mode"]');
+    if (form) state.printerConfig.mode = form.value;
+    document.querySelectorAll('[data-printer-field]').forEach((input) => {
+      const field = input.dataset.printerField;
+      if (field === 'mode') return;
+      if (input.type === 'checkbox') state.printerConfig[field] = input.checked;
+      else if (field === 'copies') state.printerConfig[field] = Number(input.value || 1);
+      else state.printerConfig[field] = String(input.value || '');
+    });
+    return renderSaved();
+  }
+  if (action === 'new-printer') {
+    const nextName = `Impressora ${state.printers.length + 1}`;
+    state.printers.push({
+      id: `printer-${Date.now()}`,
+      name: nextName,
+      type: 'bluetooth',
+      status: 'Disponivel',
+      default: false
+    });
+    return renderSaved();
+  }
+  if (action === 'connect-printer') {
+    const target = state.printers.find((printer) => printer.id === button.dataset.printerId);
+    if (!target) return;
+    if (navigator.bluetooth && target.type === 'bluetooth') {
+      navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ['device_information'] })
+        .then((device) => {
+          target.name = device.name || target.name;
+          target.status = 'Conectada';
+          state.printerConfig.deviceName = target.name;
+          state.printerConfig.mode = 'bluetooth';
+          save();
+          renderSaved();
+          notify(`Impressora ${target.name} conectada.`);
+        })
+        .catch(() => {
+          target.status = 'Disponivel';
+          save();
+          renderSaved();
+          notify('Conexão não confirmada. Tente novamente.');
+        });
+      return;
+    }
+    target.status = 'Conectada';
+    state.printerConfig.deviceName = target.name;
+    state.printerConfig.mode = target.type === 'rede' ? 'rede' : target.type === 'bluetooth' ? 'bluetooth' : 'cabo';
+    save();
+    renderSaved();
+    notify(`Impressora ${target.name} pronta para uso.`);
+    return;
+  }
+  if (action === 'print-test') {
+    return printReceipt(sampleOrder());
+  }
+  if (action === 'logout') {
+    sessionStorage.removeItem(sessionKey);
+    return render();
+  }
+  if (action === 'copy') {
+    const text = shopLink();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(() => notify('Link copiado para compartilhar')).catch(() => {
+        notify('Link pronto para copiar');
+      });
+    }
+    notify('Link pronto para copiar');
+    return;
+  }
+  if (action === 'open-shop') return window.open(shopLink(), '_blank', 'noopener');
+  if (action === 'open-order') return orderDetails(state.orders.find((order) => order.id === button.dataset.id));
+  if (action === 'accept-order') return acceptOrder(button.dataset.id);
+  if (action === 'quick-chat') {
+    state.view = 'chat';
+    return renderSaved();
+  }
+  if (action === 'advance-order') return advanceOrder(button.dataset.id);
+
+  if (action === 'add-cart') {
+    const product = state.products.find((item) => String(item.id) === String(button.dataset.id));
+    if (!product) return;
+    const current = state.cart.find((item) => item.id === product.id);
+    if (current) current.quantity += 1;
+    else state.cart.push({ ...product, quantity: 1, notes: '' });
+    save();
+    return customerShop();
+  }
+
+  if (action === 'open-cart') return cartDialog();
+  if (action === 'customer-chat') return customerChat();
+}
+
+function acceptOrder(id) {
+  const order = state.orders.find((item) => item.id === id);
+  if (!order) return;
+  order.status = 'Em preparo';
+  order.updatedAt = Date.now();
+  order.readyAt = Date.now() + 12 * 60000;
+  save();
+  if (state.printerConfig.autoPrint) printReceipt(order);
+  render();
+  notify(`Pedido ${order.id} aceito automaticamente.`);
+}
+
+function advanceOrder(id) {
+  const order = state.orders.find((item) => item.id === id);
+  if (!order) return;
+
+  const next = {
+    Aguardando: 'Em preparo',
+    'Em preparo': 'Pronto',
+    Pronto: order.fulfillment === 'delivery' ? 'Saiu para entrega' : 'Entregue',
+    'Saiu para entrega': 'Entregue'
+  };
+
+  order.status = next[order.status] || 'Entregue';
+  order.updatedAt = Date.now();
+  if (order.status === 'Pronto' || order.status === 'Saiu para entrega' || order.status === 'Entregue') {
+    order.readyAt = Date.now() + 12 * 60000;
+  }
+
+  save();
+  render();
+  notify(`Pedido ${order.id} atualizado`);
+}
+
+function sampleOrder() {
+  return {
+    id: '#1042',
+    customer: 'Maria Souza',
+    phone: '(11) 99999-0000',
+    address: 'Rua da Liberdade, 240 · Centro',
+    payment: 'Pix',
+    fulfillment: 'delivery',
+    items: [
+      { quantity: 1, name: 'X-Bacon', description: 'Sem cebola', price: 32.9 },
+      { quantity: 2, name: 'Refrigerante 600ml', description: 'Cola-Cola', price: 8.5 }
+    ],
+    notes: 'Entregar depois das 19h.',
+    total: 49.9,
+    createdAt: Date.now()
+  };
+}
+
+function buildReceiptMarkup(order, config = state.printerConfig, preview = false) {
+  const customer = config.includeCustomer ? `<div class="receipt-line"><span>Cliente</span><strong>${esc(order.customer || 'Cliente')}</strong></div>` : '';
+  const phone = config.includePhone ? `<div class="receipt-line"><span>Telefone</span><strong>${esc(order.phone || '')}</strong></div>` : '';
+  const address = config.includeAddress && order.fulfillment === 'delivery' ? `<div class="receipt-line"><span>Entrega</span><strong>${esc(order.address || '')}</strong></div>` : '';
+  const payment = config.includePayment ? `<div class="receipt-line"><span>Pagamento</span><strong>${esc(order.payment || 'Pix')}</strong></div>` : '';
+  const notes = config.includeNotes && order.notes ? `<div class="receipt-note"><span>Obs.</span><strong>${esc(order.notes)}</strong></div>` : '';
+  const items = config.includeItems ? (order.items || []).map((item) => `
+    <div class="receipt-item">
+      <div><strong>${item.quantity}x ${esc(item.name)}</strong><small>${esc(item.description || '')}</small></div>
+      <span>${money(item.price * (item.quantity || 1))}</span>
+    </div>
+  `).join('') : '';
+  const footer = config.includeFooter ? `<div class="receipt-footer">${esc(config.footerText || 'Obrigado pela preferência!')}</div>` : '';
+
+  return `
+    <div class="receipt-paper ${preview ? 'preview' : ''}">
+      <div class="receipt-brand">${esc(state.shop?.name || 'PedeIA')}</div>
+      <div class="receipt-header">COMANDA ${esc(order.id || '#0000')}</div>
+      <div class="receipt-meta">${new Date(order.createdAt || Date.now()).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</div>
+      ${customer}
+      ${phone}
+      ${address}
+      ${payment}
+      <div class="receipt-divider"></div>
+      ${items}
+      <div class="receipt-divider"></div>
+      <div class="receipt-total"><span>Total</span><strong>${money(order.total || 0)}</strong></div>
+      ${notes}
+      ${footer}
+    </div>
+  `;
+}
+
+function printReceipt(order) {
+  const config = { ...state.printerConfig };
+  const printWindow = window.open('', '_blank', 'width=420,height=900');
+  if (!printWindow) {
+    notify('Seu navegador bloqueou a janela de impressão. Permita popup e tente novamente.');
+    return;
+  }
+
+  const html = `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Comanda ${esc(order.id || '')}</title>
+        <style>
+          body { margin: 0; background: #f5f5f5; font-family: Arial, sans-serif; color: #1a1a1a; }
+          .print-shell { width: 100%; display: flex; justify-content: center; padding: 16px; box-sizing: border-box; }
+          .receipt-paper { width: 100%; max-width: 360px; background: #fff; padding: 18px 16px; box-sizing: border-box; }
+          .receipt-brand { font-weight: 700; font-size: 17px; text-align: center; margin-bottom: 10px; }
+          .receipt-header { font-weight: 700; text-align: center; letter-spacing: 1px; margin-bottom: 8px; }
+          .receipt-meta, .receipt-line, .receipt-note, .receipt-total, .receipt-item { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+          .receipt-line, .receipt-note { margin-bottom: 8px; }
+          .receipt-line span, .receipt-note span, .receipt-total span { opacity: .7; }
+          .receipt-item { align-items: flex-start; margin: 8px 0; } .receipt-item strong { display:block; font-size: 12px; }
+          .receipt-item small { display:block; font-size: 10px; opacity: .7; }
+          .receipt-divider { border-top: 1px dashed #999; margin: 10px 0; }
+          .receipt-total { font-size: 13px; font-weight: 700; margin-top: 8px; }
+          .receipt-footer { margin-top: 12px; text-align:center; font-size: 11px; opacity: .8; }
+          @media print { body { background: #fff; } .print-shell { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="print-shell">
+          ${buildReceiptMarkup(order, config, false)}
+        </div>
+      </body>
+    </html>
+  `;
+
+  printWindow.document.open();
+  printWindow.document.write(html);
+  printWindow.document.close();
+  printWindow.focus();
+
+  setTimeout(() => {
+    printWindow.print();
+  }, 300);
+
+  if (config.mode === 'bluetooth' && navigator.bluetooth) {
+    notify('Pedido aceito e comanda preparada para impressora Bluetooth.');
+  } else {
+    notify(`Comanda ${order.id} pronta para impressão.`);
+  }
+}
+
+function categoryDialog() {
+  showDialog(`
+    <div class="dialog-head">
+      <span class="category-icon">+</span>
+      <h2>Nova categoria</h2>
+      <p>Crie uma aba para organizar seus produtos.</p>
+    </div>
+    <form id="category-form" class="dialog-form">
+      <label>Nome da categoria<input name="name" required placeholder="Ex.: Tapiocas"></label>
+      <button class="primary-button">Criar categoria</button>
+    </form>
+  `);
+
+  document.querySelector('#category-form').onsubmit = (event) => {
+    event.preventDefault();
+    const name = String(new FormData(event.currentTarget).get('name') || '').trim();
+    if (name && !state.categories.includes(name)) state.categories.push(name);
+    closeDialog();
+    renderSaved();
+  };
+}
+
+function productDialog(id) {
+  const product = state.products.find((item) => String(item.id) === String(id));
+  showDialog(`
+    <div class="dialog-head">
+      <span class="category-icon">Produto</span>
+      <h2>${product ? 'Editar produto' : 'Novo produto'}</h2>
+      <p>Foto, categoria, descricao e preco em um so lugar.</p>
+    </div>
+    <form id="product-form" class="dialog-form">
+      <label class="photo-picker">+<span>Adicionar foto<input name="photo" type="file" accept="image/*"></span></label>
+      <label>Nome<input name="name" required value="${esc(product?.name || '')}" placeholder="Ex.: X-Bacon especial"></label>
+      <label>Categoria<select name="category" required>${state.categories.map((category) => `<option ${product?.category === category ? 'selected' : ''}>${esc(category)}</option>`).join('')}</select></label>
+      <label>Descricao<textarea name="description" required placeholder="Ingredientes, tamanho e diferenciais.">${esc(product?.description || '')}</textarea></label>
+      <label>Preco<input name="price" type="number" min="0.01" step="0.01" required value="${product?.price || ''}" placeholder="0,00"></label>
+      <button class="primary-button">Salvar produto</button>
+    </form>
+  `);
+
+  document.querySelector('#product-form').onsubmit = (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+
+    const finish = (photo) => {
+      const next = {
+        id: product?.id || Date.now(),
+        name: String(data.get('name') || '').trim(),
+        category: String(data.get('category') || state.categories[0] || 'Geral'),
+        description: String(data.get('description') || '').trim(),
+        price: Number(data.get('price') || 0),
+        photo: photo || product?.photo || null,
+        available: product?.available ?? true
+      };
+
+      if (product) Object.assign(product, next);
+      else state.products.push(next);
+
+      closeDialog();
+      renderSaved();
+    };
+
+    const file = form.querySelector('[name=photo]').files[0];
+    file ? readImage(file, finish) : finish(null);
+  };
+}
+
+function showDialog(content) {
+  const overlay = document.createElement('div');
+  overlay.className = 'cart-overlay dialog-overlay';
+  overlay.innerHTML = `<div class="cart-modal dialog-modal"><button class="modal-close">Fechar</button>${content}</div>`;
+  overlay.querySelector('.modal-close').onclick = closeDialog;
+  overlay.onclick = (event) => {
+    if (event.target === overlay) closeDialog();
+  };
+  document.body.appendChild(overlay);
+}
+
+function closeDialog() {
+  document.querySelector('.dialog-overlay')?.remove();
+}
+
+function readImage(file, callback) {
+  if (!file) return callback(null);
+  const reader = new FileReader();
+  reader.onload = () => callback(reader.result);
+  reader.readAsDataURL(file);
+}
+
+function cartDialog() {
+  const total = state.cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+
+  showDialog(`
+    <div class="dialog-head">
+      <span class="category-icon">Carrinho</span>
+      <h2>Sua sacola</h2>
+      <p>Deixe um recado para a cozinha em cada item.</p>
+    </div>
+    <div class="cart-items">
+      ${state.cart.length ? state.cart.map((item) => `
+        <div class="cart-item">
+          <span>${item.photo ? `<img src="${item.photo}" alt="">` : ''}</span>
+          <div>
+            <strong>${esc(item.name)}</strong>
+            <small>${money(item.price)} · ${item.quantity}x</small>
+            <label class="note-field">
+              <span>OBSERVACOES DO ITEM</span>
+              <input data-note="${item.id}" value="${esc(item.notes || '')}" placeholder="Ex.: sem cebola, bem passado...">
+              <small>Opcional - a loja vera este recado no pedido</small>
+            </label>
+          </div>
+        </div>
+      `).join('') : '<p>Sua sacola esta vazia.</p>'}
+    </div>
+    ${state.cart.length ? `<div class="cart-total"><span>Total</span><strong>${money(total)}</strong></div><button class="primary-button checkout-button">Continuar para entrega</button>` : ''}
+  `);
+
+  document.querySelectorAll('[data-note]').forEach((input) => {
+    input.oninput = () => {
+      const item = state.cart.find((entry) => String(entry.id) === String(input.dataset.note));
+      if (item) item.notes = input.value;
+      save();
+    };
+  });
+
+  document.querySelector('.checkout-button')?.addEventListener('click', () => {
+    closeDialog();
+    checkoutDialog();
+  });
+}
+
+function checkoutDialog() {
+  const cached = JSON.parse(localStorage.getItem(clientKey) || 'null') || {};
+  const modes = [
+    state.delivery.delivery ? '<option value="delivery">Entrega</option>' : '',
+    state.delivery.pickup ? '<option value="pickup">Retirada no local</option>' : ''
+  ].join('');
+
+  showDialog(`
+    <div class="dialog-head">
+      <span class="category-icon">Pedido</span>
+      <h2>Finalizar pedido</h2>
+      <p>Seus dados ficam salvos neste dispositivo para o proximo pedido.</p>
+    </div>
+    <form id="checkout-form" class="dialog-form">
+      <label>Seu nome<input name="customer" required value="${esc(cached.name || '')}" placeholder="Como podemos chamar voce?"></label>
+      <label>Telefone<input name="phone" required value="${esc(cached.phone || '')}" placeholder="(00) 00000-0000"></label>
+      <label>Forma de recebimento<select name="fulfillment">${modes}</select></label>
+      <label class="address-field">Endereco de entrega<input name="address" value="${esc(cached.address || '')}" placeholder="Rua, numero e complemento"></label>
+      <label>Pagamento<select name="payment"><option>Pix</option><option>Cartao na entrega</option><option>Dinheiro</option></select></label>
+      <button class="primary-button">Enviar pedido</button>
+    </form>
+  `);
+
+  const form = document.querySelector('#checkout-form');
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const fulfillment = String(data.get('fulfillment') || 'pickup');
+    const address = String(data.get('address') || '').trim();
+
+    if (fulfillment === 'delivery' && !address) {
+      notify('Informe o endereco de entrega.');
+      return;
+    }
+
+    const customer = String(data.get('customer') || '').trim();
+    const phone = String(data.get('phone') || '').trim();
+    if (!customer || !phone) {
+      notify('Informe seu nome e telefone para continuar.');
+      return;
+    }
+
+    const total = state.cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+    const minutes = fulfillment === 'delivery' ? Number(state.delivery.deliveryMinutes || 45) : Number(state.delivery.pickupMinutes || 20);
+    const orderItems = state.cart.map((item) => ({
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      quantity: item.quantity,
+      notes: item.notes,
+      price: item.price
+    }));
+
+    localStorage.setItem(clientKey, JSON.stringify({ name: customer, phone, address }));
+
+    const order = {
+      id: `#${Date.now().toString().slice(-4)}`,
+      customer,
+      phone,
+      address,
+      payment: String(data.get('payment') || 'Pix'),
+      fulfillment,
+      status: 'Aguardando',
+      total,
+      items: orderItems,
+      notes: orderItems.filter((item) => item.notes).map((item) => `${item.name}: ${item.notes}`).join(' | '),
+      createdAt: Date.now(),
+      readyAt: Date.now() + minutes * 60000,
+      updatedAt: Date.now()
+    };
+
+    state.orders.push(order);
+    state.cart = [];
+    save();
+    closeDialog();
+    render();
+    notify('Pedido enviado com sucesso!');
+  };
+}
+
+function customerChat() {
+  const storeMessages = state.messages.filter((msg) => msg.scope === 'store' || msg.from === 'merchant');
+  showDialog(`
+    <div class="dialog-head">
+      <span class="category-icon">Chat</span>
+      <h2>Falar com a loja</h2>
+      <p>Envie uma duvida e a loja respondera por aqui.</p>
+    </div>
+    <div class="chat-messages compact">
+      ${storeMessages.length ? storeMessages.map((msg) => `<div class="message ${msg.from === 'customer' ? 'mine' : ''}">${esc(msg.text)}<small>${esc(msg.time)}</small></div>`).join('') : '<p>Nenhuma mensagem ainda.</p>'}
+    </div>
+    <form id="customer-chat" class="chat-compose">
+      <input name="message" required placeholder="Escreva sua duvida...">
+      <button>Enviar</button>
+    </form>
+  `);
+
+  document.querySelector('#customer-chat').onsubmit = (event) => {
+    event.preventDefault();
+    const input = event.currentTarget.elements.message;
+    const text = String(input.value || '').trim();
+    if (!text) return;
+
+    state.messages.push({
+      from: 'customer',
+      text,
+      time: nowTime(),
+      scope: 'store'
+    });
+    save();
+    closeDialog();
+    notify('Mensagem enviada para a loja');
+  };
+}
+
+function nowTime() {
+  return new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
 
 render();
+
+document.addEventListener('change', (event) => {
+  if (event.target.matches('[data-delivery]')) {
+    state.delivery[event.target.dataset.delivery] = event.target.checked;
+    save();
+  }
+
+  if (event.target.matches('[data-printer-field]')) {
+    const field = event.target.dataset.printerField;
+    if (event.target.type === 'checkbox') {
+      state.printerConfig[field] = event.target.checked;
+    } else if (field === 'copies') {
+      state.printerConfig[field] = Number(event.target.value || 1);
+    } else {
+      state.printerConfig[field] = event.target.value;
+    }
+    save();
+  }
+});
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+
+  if (button.dataset.action === 'confirm-receipt') {
+    const order = state.orders.find((item) => item.id === button.dataset.id);
+    if (order) {
+      order.confirmed = true;
+      save();
+      render();
+      notify('Recebimento confirmado. Obrigado!');
+    }
+  }
+
+  if (button.dataset.action === 'rate-order') {
+    const order = state.orders.find((item) => item.id === button.dataset.id);
+    if (!order) return;
+
+    showDialog(`
+      <div class="dialog-head">
+        <span class="category-icon">Nota</span>
+        <h2>Avalie seu pedido</h2>
+        <p>Conte como foi a experiencia com a loja.</p>
+      </div>
+      <form id="rating-form" class="dialog-form">
+        <label>Nota<select name="value"><option value="5">5 - Excelente</option><option value="4">4 - Muito bom</option><option value="3">3 - Bom</option><option value="2">2 - Pode melhorar</option><option value="1">1 - Ruim</option></select></label>
+        <label>Comentario<textarea name="comment" placeholder="Escreva uma mensagem para a loja"></textarea></label>
+        <label>Foto ou video (opcional)<input type="file" accept="image/*,video/*"></label>
+        <button class="primary-button">Enviar avaliacao</button>
+      </form>
+    `);
+
+    document.querySelector('#rating-form').onsubmit = (ratingEvent) => {
+      ratingEvent.preventDefault();
+      const data = new FormData(ratingEvent.currentTarget);
+      state.ratings.push({
+        orderId: order.id,
+        value: Number(data.get('value') || 5),
+        comment: String(data.get('comment') || '').trim(),
+        createdAt: Date.now()
+      });
+      order.rated = true;
+      save();
+      closeDialog();
+      notify('Avaliacao enviada para a loja');
+      customerShop();
+    };
+  }
+});
