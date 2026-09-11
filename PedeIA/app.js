@@ -4,8 +4,23 @@ const stateKey = 'pedeia-state-v5';
 const sessionKey = 'pedeia-merchant-session';
 const clientKey = 'pedeia-client-profile-v1';
 
+const weekDays = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+
+function defaultShopSchedule() {
+  return {
+    Segunda: { enabled: true, open: '11:00', close: '22:00' },
+    Terça: { enabled: true, open: '11:00', close: '22:00' },
+    Quarta: { enabled: true, open: '11:00', close: '22:00' },
+    Quinta: { enabled: true, open: '11:00', close: '22:00' },
+    Sexta: { enabled: true, open: '11:00', close: '23:00' },
+    Sábado: { enabled: true, open: '10:00', close: '23:00' },
+    Domingo: { enabled: false, open: '12:00', close: '20:00' }
+  };
+}
+
 const blank = {
   view: 'dashboard',
+  customerView: 'menu',
   merchant: null,
   shop: null,
   categories: [],
@@ -52,8 +67,37 @@ function readState() {
   }
 }
 
+async function loadFromServer() {
+  try {
+    const response = await fetch('/api/state');
+    if (!response.ok) return;
+    const serverState = await response.json();
+    if (serverState && Object.keys(serverState).length) {
+      const merged = { ...blank, ...serverState };
+      state = merged;
+      localStorage.setItem(stateKey, JSON.stringify(merged));
+    }
+  } catch {
+    // sem fallback de rede: continua usando localStorage
+  }
+}
+
 function save() {
-  localStorage.setItem(stateKey, JSON.stringify(state));
+  try {
+    localStorage.setItem(stateKey, JSON.stringify(state));
+  } catch {
+    // ignore storage quota issues
+  }
+
+  try {
+    fetch('/api/save-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state)
+    }).catch(() => {});
+  } catch {
+    // ignore network failures
+  }
 }
 
 function money(value) {
@@ -122,7 +166,8 @@ function ensureDemoData() {
     publicId: 'brasa-massa-demo',
     description: 'Hamburgueres artesanais, porções e bebidas para quem curte sabor de verdade.',
     photo: '',
-    isOpen: true
+    isOpen: true,
+    schedule: defaultShopSchedule()
   };
   state.categories = ['Lanches', 'Porções', 'Bebidas'];
   state.products = [
@@ -138,9 +183,36 @@ function render() {
   if (lojaParam !== null) {
     return lojaParam === state.shop?.publicId ? customerShop() : missingShop();
   }
-  ensureDemoData();
+
+  if (!state.shop && !state.merchant) {
+    ensureDemoData();
+  }
+
   if (!merchantLogged() || !state.merchant || !state.shop) return authView();
   merchantPanel();
+}
+
+async function bootstrap() {
+  await loadFromServer();
+  render();
+  startLiveRefresh();
+}
+
+function startLiveRefresh() {
+  if (window.__pedeiaLiveRefresh) return;
+  window.__pedeiaLiveRefresh = setInterval(() => {
+    const lojaParam = publicShop();
+    if (lojaParam !== null) {
+      if (state.shop && lojaParam === state.shop.publicId) {
+        customerShop();
+      }
+      return;
+    }
+
+    if (merchantLogged() && state.merchant && state.shop && app) {
+      render();
+    }
+  }, 1000);
 }
 
 function authView() {
@@ -227,7 +299,8 @@ function registerMerchant(event) {
     publicId: `${slug(shopName)}-${Math.random().toString(36).slice(2, 7)}`,
     description: 'Adicione uma descricao para apresentar seu comercio.',
     photo: '',
-    isOpen: true
+    isOpen: true,
+    schedule: defaultShopSchedule()
   };
 
   state.categories = [];
@@ -261,7 +334,15 @@ function loginMerchant(event) {
 }
 
 function nav(view, icon, text, count = '') {
-  return `<button class="${state.view === view ? 'active' : ''}" data-view="${view}"><span class="nav-icon ${icon}"></span>${text}${count !== '' ? `<b>${count}</b>` : ''}</button>`;
+  const badge = Number(count || 0);
+  return `<button class="${state.view === view ? 'active' : ''}" data-view="${view}"><span class="nav-icon ${icon}"></span>${text}${badge > 0 ? `<b class="nav-badge">${badge}</b>` : ''}</button>`;
+}
+
+function unreadMessagesCount(type = 'merchant') {
+  if (type === 'merchant') {
+    return state.messages.filter((msg) => msg.scope === 'order' && msg.from !== 'merchant').length;
+  }
+  return state.messages.filter((msg) => msg.scope === 'store' && msg.from === 'merchant').length;
 }
 
 function merchantPanel() {
@@ -294,7 +375,7 @@ function merchantPanel() {
           ${nav('dashboard', 'home', 'Visao geral')}
           ${nav('menu', 'menu', 'Cardapio')}
           ${nav('categories', 'categories', 'Categorias')}
-          ${nav('chat', 'chat', 'Conversas')}
+          ${nav('chat', 'chat', 'Conversas', unreadMessagesCount('merchant'))}
           ${nav('printers', 'settings', 'Impressoras')}
           ${nav('settings', 'settings', 'Minha loja')}
         </nav>
@@ -656,20 +737,25 @@ function printersView() {
       </article>
     </section>
 
-    <section class="panel printer-preview-panel">
-      <div class="panel-heading">
-        <div>
-          <p class="eyebrow">VISUALIZACAO</p>
-          <h2>Como a comanda vai sair</h2>
-        </div>
-        <button class="secondary-button" data-action="print-test">Testar impressão</button>
-      </div>
-      <div class="receipt-preview">${buildReceiptMarkup(sample, state.printerConfig, true)}</div>
-    </section>
   `;
 }
 
 function settingsView() {
+  const schedule = state.shop.schedule || defaultShopSchedule();
+  const scheduleRows = weekDays.map((day) => {
+    const config = schedule[day] || { enabled: true, open: '11:00', close: '22:00' };
+    return `
+      <div class="hours-row">
+        <label class="hours-day"><input type="checkbox" data-hours-day="${day}" ${config.enabled ? 'checked' : ''}><span>${day}</span></label>
+        <div class="hours-range">
+          <input type="time" data-hours-open="${day}" value="${config.open}">
+          <span>até</span>
+          <input type="time" data-hours-close="${day}" value="${config.close}">
+        </div>
+      </div>
+    `;
+  }).join('');
+
   return `
     <section class="page-intro">
       <div>
@@ -703,6 +789,15 @@ function settingsView() {
           <button class="primary-button" data-action="copy">Copiar link</button>
         </div>
       </article>
+
+      <article class="panel schedule-settings">
+        <p class="eyebrow">HORARIOS DE FUNCIONAMENTO</p>
+        <h3>Configure os dias e o horario da semana</h3>
+        <div class="schedule-list">
+          ${scheduleRows}
+        </div>
+        <button class="primary-button" data-action="save-shop-hours">Salvar horarios</button>
+      </article>
     </section>
   `;
 }
@@ -716,11 +811,14 @@ function customerShop() {
     .reverse()
     .find((order) => cached.name && order.customer === cached.name);
 
+  const customerChatBadge = unreadMessagesCount('customer') > 0 ? `<span class="chat-badge">${unreadMessagesCount('customer')}</span>` : '';
   app.innerHTML = `
     <div class="customer-app">
       <header class="customer-header">
         ${brand()}
-        <button class="chat-shop-button" data-action="customer-chat">Falar com a loja</button>
+        <div class="customer-header-actions">
+          <button class="chat-shop-button" data-action="customer-chat">${customerChatBadge}💬 Falar com a loja</button>
+        </div>
       </header>
 
       <section class="store-hero">
@@ -733,25 +831,33 @@ function customerShop() {
         </div>
       </section>
 
-      ${tracked ? customerTracker(tracked) : ''}
-
-      <nav class="customer-categories">
-        ${state.categories.map((category) => `<a href="#${encodeURIComponent(category)}">${esc(category)}</a>`).join('')}
+      <nav class="customer-tabs">
+        <button class="${state.customerView === 'menu' ? 'active' : ''}" data-customer-view="menu">Cardapio</button>
+        <button class="${state.customerView === 'tracking' ? 'active' : ''}" data-customer-view="tracking">Acompanhar pedido</button>
       </nav>
 
-      <main class="customer-menu">
-        ${state.categories.length ? state.categories.map((category) => `
-          <section id="${encodeURIComponent(category)}">
-            <div class="category-heading">
-              <h2>${esc(category)}</h2>
-              <span>${state.products.filter((item) => item.category === category && item.available).length} opcoes</span>
-            </div>
-            <div class="customer-products">
-              ${state.products.filter((item) => item.category === category && item.available).map(customerProduct).join('')}
-            </div>
-          </section>
-        `).join('') : '<div class="customer-empty"><strong>O cardapio esta sendo preparado.</strong><small>Volte em breve.</small></div>'}
-      </main>
+      ${tracked && state.customerView === 'tracking' ? customerTrackingPanel(tracked) : ''}
+
+      ${state.customerView === 'menu' ? `
+        ${tracked ? customerTracker(tracked) : ''}
+        <nav class="customer-categories">
+          ${state.categories.map((category) => `<a href="#${encodeURIComponent(category)}">${esc(category)}</a>`).join('')}
+        </nav>
+
+        <main class="customer-menu">
+          ${state.categories.length ? state.categories.map((category) => `
+            <section id="${encodeURIComponent(category)}">
+              <div class="category-heading">
+                <h2>${esc(category)}</h2>
+                <span>${state.products.filter((item) => item.category === category && item.available).length} opcoes</span>
+              </div>
+              <div class="customer-products">
+                ${state.products.filter((item) => item.category === category && item.available).map(customerProduct).join('')}
+              </div>
+            </section>
+          `).join('') : '<div class="customer-empty"><strong>O cardapio esta sendo preparado.</strong><small>Volte em breve.</small></div>'}
+        </main>
+      ` : ''}
 
       <button class="floating-cart ${state.cart.length ? '' : 'empty-floating'}" data-action="open-cart">
         Carrinho ${state.cart.length ? `· ${state.cart.length} item(s) · ${money(total)}` : ''}
@@ -762,6 +868,80 @@ function customerShop() {
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.onclick = handleAction;
   });
+
+  document.querySelectorAll('[data-customer-view]').forEach((button) => {
+    button.onclick = () => {
+      state.customerView = button.dataset.customerView;
+      save();
+      customerShop();
+    };
+  });
+}
+
+function customerTrackingPanel(order) {
+  const delivered = order.status === 'Entregue';
+  const orderItems = (order.items || []).map((item) => `
+    <div class="tracking-item">
+      <div>
+        <strong>${item.quantity}x ${esc(item.name)}</strong>
+        <small>${esc(item.description || '')}</small>
+      </div>
+      <span>${money((Number(item.price || 0) * Number(item.quantity || 0)))}</span>
+    </div>
+  `).join('');
+
+  return `
+    <section class="customer-tracking-page">
+      <article class="tracking-main-card">
+        <div class="tracking-header">
+          <div>
+            <p class="eyebrow">PEDIDO ${esc(order.id)}</p>
+            <h2>${statusLabel(order.status)}</h2>
+          </div>
+          <span class="tracking-pill ${order.status === 'Aguardando' ? 'waiting' : order.status === 'Em preparo' ? 'preparing' : order.status === 'Pronto' || order.status === 'Saiu para entrega' ? 'ready' : 'done'}">${esc(order.status)}</span>
+        </div>
+
+        <div class="tracker-steps">
+          <span class="${order.status !== 'Aguardando' ? 'done' : 'current'}">Recebido</span>
+          <span class="${['Em preparo', 'Pronto', 'Saiu para entrega', 'Entregue'].includes(order.status) ? 'done' : order.status === 'Aguardando' ? '' : 'current'}">Preparando</span>
+          <span class="${['Pronto', 'Saiu para entrega', 'Entregue'].includes(order.status) ? 'done' : ''}">${order.fulfillment === 'delivery' ? 'A caminho' : 'Pronto'}</span>
+          <span class="${delivered ? 'done' : ''}">Finalizado</span>
+        </div>
+
+        <div class="tracking-meta">
+          <div><span>Tempo</span><strong>${remaining(order)}</strong></div>
+          <div><span>Forma</span><strong>${order.fulfillment === 'delivery' ? 'Entrega' : 'Retirada'}</strong></div>
+          <div><span>Total</span><strong>${money(order.total || 0)}</strong></div>
+        </div>
+      </article>
+
+      <div class="tracking-grid">
+        <article class="tracking-panel">
+          <p class="eyebrow">RESUMO</p>
+          <div class="tracking-address-block">
+            <strong>${esc(order.customer || 'Cliente')}</strong>
+            <small>${esc(order.phone || '')}</small>
+            ${order.fulfillment === 'delivery' ? `<small>${esc(order.address || 'Endereço não informado')}</small>` : '<small>Retirada no local</small>'}
+          </div>
+          <div class="tracking-items">${orderItems || '<p>Itens do pedido aparecerão aqui.</p>'}</div>
+        </article>
+
+        <article class="tracking-panel">
+          <p class="eyebrow">ATUALIZACOES</p>
+          <div class="tracking-updates">
+            <div class="update-item"><strong>Pedido recebido</strong><small>Estamos processando seu pedido.</small></div>
+            <div class="update-item"><strong>Em preparo</strong><small>A cozinha esta montando sua comanda.</small></div>
+            <div class="update-item"><strong>Pronto</strong><small>Seu pedido esta pronto para retirada ou entrega.</small></div>
+          </div>
+          <div class="tracking-actions">
+            <button class="primary-button" data-action="customer-chat">Falar com a loja</button>
+            ${delivered && !order.confirmed ? `<button class="primary-button" data-action="confirm-receipt" data-id="${order.id}">Confirmar recebi</button>` : ''}
+            ${delivered ? `<button class="secondary-button" data-action="rate-order" data-id="${order.id}">Avaliar pedido</button>` : ''}
+          </div>
+        </article>
+      </div>
+    </section>
+  `;
 }
 
 function customerTracker(order) {
@@ -880,7 +1060,17 @@ function handleAction(event) {
     return renderSaved();
   }
   if (action === 'toggle-open') {
-    state.shop.isOpen = !state.shop.isOpen;
+    const nextOpen = !state.shop.isOpen;
+    if (!nextOpen) {
+      const finishedOrders = state.orders.filter((order) => ['Entregue', 'Finalizado', 'Pronto', 'Saiu para entrega'].includes(order.status));
+      const message = finishedOrders.length ? 'Fechar a loja e apagar os pedidos já finalizados?' : 'Deseja fechar a loja?';
+      const shouldProceed = window.confirm(message);
+      if (!shouldProceed) return;
+      if (finishedOrders.length) {
+        state.orders = state.orders.filter((order) => !['Entregue', 'Finalizado', 'Pronto', 'Saiu para entrega'].includes(order.status));
+      }
+    }
+    state.shop.isOpen = nextOpen;
     return renderSaved();
   }
   if (action === 'save-shop') {
@@ -893,6 +1083,17 @@ function handleAction(event) {
     document.querySelectorAll('[data-delivery-min]').forEach((input) => {
       state.delivery[input.dataset.deliveryMin] = Number(input.value || 0);
     });
+    return renderSaved();
+  }
+  if (action === 'save-shop-hours') {
+    const nextSchedule = { ...defaultShopSchedule(), ...(state.shop.schedule || {}) };
+    weekDays.forEach((day) => {
+      const enabled = document.querySelector(`[data-hours-day="${day}"]`)?.checked ?? true;
+      const open = document.querySelector(`[data-hours-open="${day}"]`)?.value || '11:00';
+      const close = document.querySelector(`[data-hours-close="${day}"]`)?.value || '22:00';
+      nextSchedule[day] = { enabled, open, close };
+    });
+    state.shop.schedule = nextSchedule;
     return renderSaved();
   }
   if (action === 'save-printer-config') {
@@ -949,7 +1150,9 @@ function handleAction(event) {
     return;
   }
   if (action === 'print-test') {
-    return printReceipt(sampleOrder());
+    const sample = sampleOrder();
+    sample.id = `#TEST-${Date.now().toString().slice(-4)}`;
+    return printReceipt(sample);
   }
   if (action === 'logout') {
     sessionStorage.removeItem(sessionKey);
@@ -1118,13 +1321,17 @@ function printReceipt(order) {
   printWindow.focus();
 
   setTimeout(() => {
-    printWindow.print();
-  }, 300);
+    try {
+      printWindow.print();
+    } catch {
+      notify('A impressão foi disparada, mas seu navegador pode exigir confirmação do popup.');
+    }
+  }, 150);
 
   if (config.mode === 'bluetooth' && navigator.bluetooth) {
-    notify('Pedido aceito e comanda preparada para impressora Bluetooth.');
+    notify('Comanda enviada diretamente para impressão Bluetooth.');
   } else {
-    notify(`Comanda ${order.id} pronta para impressão.`);
+    notify(`Comanda ${order.id} enviada diretamente para impressão.`);
   }
 }
 
@@ -1380,6 +1587,7 @@ function nowTime() {
 }
 
 render();
+startLiveRefresh();
 
 document.addEventListener('change', (event) => {
   if (event.target.matches('[data-delivery]')) {
@@ -1401,6 +1609,14 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('click', (event) => {
+  const viewButton = event.target.closest('[data-customer-view]');
+  if (viewButton) {
+    state.customerView = viewButton.dataset.customerView;
+    save();
+    customerShop();
+    return;
+  }
+
   const button = event.target.closest('[data-action]');
   if (!button) return;
 
