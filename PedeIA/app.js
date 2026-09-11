@@ -35,7 +35,8 @@ const blank = {
     pickup: true,
     delivery: true,
     pickupMinutes: 20,
-    deliveryMinutes: 45
+    deliveryMinutes: 45,
+    autoAccept: false
   },
   printerConfig: {
     mode: 'cabo',
@@ -58,12 +59,38 @@ const blank = {
 
 let state = readState();
 
+function fingerprint(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function readState() {
   try {
     const stored = JSON.parse(localStorage.getItem(stateKey) || 'null');
     return { ...blank, ...(stored || {}) };
   } catch {
     return structuredClone(blank);
+  }
+}
+
+async function syncServerState() {
+  try {
+    const response = await fetch('/api/state', { cache: 'no-store' });
+    if (!response.ok) return;
+    const serverState = await response.json();
+    if (!serverState || !Object.keys(serverState).length) return;
+
+    const merged = { ...blank, ...serverState };
+    if (fingerprint(state) !== fingerprint(merged)) {
+      state = merged;
+      localStorage.setItem(stateKey, JSON.stringify(merged));
+      render();
+    }
+  } catch {
+    // sem acesso ao servidor: continua localmente
   }
 }
 
@@ -194,25 +221,34 @@ function render() {
 
 async function bootstrap() {
   await loadFromServer();
+  await syncServerState();
   render();
   startLiveRefresh();
 }
 
 function startLiveRefresh() {
   if (window.__pedeiaLiveRefresh) return;
-  window.__pedeiaLiveRefresh = setInterval(() => {
+
+  window.__pedeiaLiveRefresh = setInterval(async () => {
     const lojaParam = publicShop();
+
     if (lojaParam !== null) {
-      if (state.shop && lojaParam === state.shop.publicId) {
+      await syncServerState();
+      if (state.shop && lojaParam === state.shop.publicId && app) {
         customerShop();
       }
       return;
     }
 
-    if (merchantLogged() && state.merchant && state.shop && app) {
-      render();
+    if (state.merchant && state.shop && app) {
+      await syncServerState();
+      if (merchantLogged()) {
+        render();
+      } else if (document.visibilityState === 'visible') {
+        render();
+      }
     }
-  }, 1000);
+  }, 1500);
 }
 
 function authView() {
@@ -493,6 +529,26 @@ function orderBoard() {
         <button class="${state.orderFilter === 'pickup' ? 'selected' : ''}" data-filter="pickup">Retirada</button>
       </div>
     </div>
+
+    <section class="order-config-panel panel">
+      <div class="order-config-header">
+        <div class="order-config-pill">
+          <span>Balcão</span>
+          <strong>${Number(state.delivery.pickupMinutes || 20)} a ${Number(state.delivery.pickupMinutes || 20) + 5} min</strong>
+        </div>
+        <div class="order-config-pill">
+          <span>Delivery</span>
+          <strong>${Number(state.delivery.deliveryMinutes || 45)} a ${Number(state.delivery.deliveryMinutes || 45) + 15} min</strong>
+        </div>
+      </div>
+      <div class="order-config-actions">
+        <label class="toggle-pill">
+          <span>Aceitar os pedidos automaticamente</span>
+          <input type="checkbox" data-auto-accept ${state.delivery.autoAccept ? 'checked' : ''}>
+        </label>
+        <button class="secondary-button" data-action="edit-order-automation">Editar</button>
+      </div>
+    </section>
 
     <section class="order-board">
       <div class="board-column incoming-column">
@@ -1085,6 +1141,39 @@ function handleAction(event) {
     });
     return renderSaved();
   }
+  if (action === 'edit-order-automation') {
+    showDialog(`
+      <div class="dialog-head">
+        <span class="category-icon">Tempo</span>
+        <h2>Configurar pedidos</h2>
+        <p>Escolha se aceita automaticamente e ajuste os prazos.</p>
+      </div>
+      <form id="automation-form" class="dialog-form">
+        <label class="choice-row">
+          <input type="checkbox" name="autoAccept" ${state.delivery.autoAccept ? 'checked' : ''}>
+          <span><strong>Aceitar pedidos automaticamente</strong><small>Sem precisar confirmar cada ordem nova</small></span>
+        </label>
+        <label>Tempo estimado para retirada<input type="number" min="1" name="pickupMinutes" value="${Number(state.delivery.pickupMinutes || 20)}"></label>
+        <label>Tempo estimado para delivery<input type="number" min="1" name="deliveryMinutes" value="${Number(state.delivery.deliveryMinutes || 45)}"></label>
+        <button class="primary-button" type="submit">Salvar ajustes</button>
+      </form>
+    `);
+
+    const form = document.querySelector('#automation-form');
+    if (!form) return;
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      state.delivery.autoAccept = Boolean(data.get('autoAccept'));
+      state.delivery.pickupMinutes = Number(data.get('pickupMinutes') || 20);
+      state.delivery.deliveryMinutes = Number(data.get('deliveryMinutes') || 45);
+      save();
+      closeDialog();
+      render();
+      notify('Configuração salva.');
+    };
+    return;
+  }
   if (action === 'save-shop-hours') {
     const nextSchedule = { ...defaultShopSchedule(), ...(state.shop.schedule || {}) };
     weekDays.forEach((day) => {
@@ -1529,7 +1618,7 @@ function checkoutDialog() {
       address,
       payment: String(data.get('payment') || 'Pix'),
       fulfillment,
-      status: 'Aguardando',
+      status: state.delivery.autoAccept ? 'Em preparo' : 'Aguardando',
       total,
       items: orderItems,
       notes: orderItems.filter((item) => item.notes).map((item) => `${item.name}: ${item.notes}`).join(' | '),
@@ -1593,6 +1682,12 @@ document.addEventListener('change', (event) => {
   if (event.target.matches('[data-delivery]')) {
     state.delivery[event.target.dataset.delivery] = event.target.checked;
     save();
+  }
+
+  if (event.target.matches('[data-auto-accept]')) {
+    state.delivery.autoAccept = event.target.checked;
+    save();
+    render();
   }
 
   if (event.target.matches('[data-printer-field]')) {
