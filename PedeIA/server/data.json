@@ -1,0 +1,91 @@
+{
+  "view": "dashboard",
+  "customerView": "menu",
+  "merchant": {
+    "name": "Maria",
+    "email": "maria@test.com",
+    "password": "123456"
+  },
+  "shop": {
+    "name": "Loja da Maria",
+    "type": "Restaurante",
+    "publicId": "loja-da-maria-2s0cm",
+    "description": "Adicione uma descricao para apresentar seu comercio.",
+    "photo": "",
+    "isOpen": true,
+    "schedule": {
+      "Segunda": {
+        "enabled": true,
+        "open": "11:00",
+        "close": "22:00"
+      },
+      "Terça": {
+        "enabled": true,
+        "open": "11:00",
+        "close": "22:00"
+      },
+      "Quarta": {
+        "enabled": true,
+        "open": "11:00",
+        "close": "22:00"
+      },
+      "Quinta": {
+        "enabled": true,
+        "open": "11:00",
+        "close": "22:00"
+      },
+      "Sexta": {
+        "enabled": true,
+        "open": "11:00",
+        "close": "23:00"
+      },
+      "Sábado": {
+        "enabled": true,
+        "open": "10:00",
+        "close": "23:00"
+      },
+      "Domingo": {
+        "enabled": false,
+        "open": "12:00",
+        "close": "20:00"
+      }
+    }
+  },
+  "categories": [],
+  "products": [],
+  "orders": [],
+  "ratings": [],
+  "messages": [],
+  "cart": [],
+  "orderQuery": "",
+  "orderFilter": "",
+  "delivery": {
+    "pickup": true,
+    "delivery": true,
+    "pickupMinutes": 20,
+    "deliveryMinutes": 45
+  },
+  "printerConfig": {
+    "mode": "cabo",
+    "deviceName": "Impressora térmica padrão",
+    "copies": 1,
+    "autoPrint": true,
+    "includeCustomer": true,
+    "includePhone": true,
+    "includeAddress": true,
+    "includeItems": true,
+    "includeNotes": true,
+    "includePayment": true,
+    "includeFooter": true,
+    "footerText": "Obrigado pela preferência!"
+  },
+  "printers": [
+    {
+      "id": "default",
+      "name": "Impressora térmica local",
+      "type": "cabo",
+      "status": "Conectada",
+      "default": true
+    }
+  ]
+}
