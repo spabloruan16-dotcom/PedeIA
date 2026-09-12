@@ -782,44 +782,48 @@ function printersView() {
       <button class="primary-button" data-action="new-printer">Adicionar impressora</button>
     </section>
 
-    <section class="settings-grid">
-      <article class="panel shop-editor">
-        <div class="editor-cover"><span>Print</span></div>
-        <div class="editor-body">
-          <p class="eyebrow">DISPOSITIVOS CADASTRADOS</p>
-          ${state.printers.length ? state.printers.map((printer) => `
-            <div class="printer-row">
-              <div>
-                <strong>${esc(printer.name)}</strong>
-                <small>${esc(printer.type)} · ${esc(printer.status || 'Disponivel')}</small>
+    <section class="settings-grid accordion-grid">
+      <details class="glass-accordion panel shop-editor" >
+        <summary>Dispositivos cadastrados</summary>
+        <div class="accordion-body editor-body">
+          <div class="editor-cover"><span>Print</span></div>
+          <div class="editor-body">
+            ${state.printers.length ? state.printers.map((printer) => `
+              <div class="printer-row">
+                <div>
+                  <strong>${esc(printer.name)}</strong>
+                  <small>${esc(printer.type)} · ${esc(printer.status || 'Disponivel')}</small>
+                </div>
+                <button class="secondary-button" data-action="connect-printer" data-printer-id="${printer.id}">${printer.status === 'Conectada' ? 'Testar' : 'Conectar'}</button>
               </div>
-              <button class="secondary-button" data-action="connect-printer" data-printer-id="${printer.id}">${printer.status === 'Conectada' ? 'Testar' : 'Conectar'}</button>
-            </div>
-          `).join('') : '<p class="muted">Nenhuma impressora cadastrada.</p>'}
+            `).join('') : '<p class="muted">Nenhuma impressora cadastrada.</p>'}
+          </div>
         </div>
-      </article>
+      </details>
 
-      <article class="panel operation-settings">
-        <p class="eyebrow">CONFIGURACAO DA COMANDA</p>
-        <label>Tipo de conexão<select data-printer-field="mode">
-          <option value="bluetooth" ${state.printerConfig.mode === 'bluetooth' ? 'selected' : ''}>Bluetooth</option>
-          <option value="cabo" ${state.printerConfig.mode === 'cabo' ? 'selected' : ''}>Cabo / USB</option>
-          <option value="rede" ${state.printerConfig.mode === 'rede' ? 'selected' : ''}>Rede / IP</option>
-          <option value="pdf" ${state.printerConfig.mode === 'pdf' ? 'selected' : ''}>PDF / impressão simples</option>
-        </select></label>
-        <label>Nome da impressora<input data-printer-field="deviceName" value="${esc(state.printerConfig.deviceName || '')}" placeholder="Ex.: Epson TM-T20"></label>
-        <label>Quantas vias saem<input type="number" min="1" max="10" data-printer-field="copies" value="${state.printerConfig.copies || 1}"></label>
-        <label class="choice-row"><input type="checkbox" data-printer-field="autoPrint" ${state.printerConfig.autoPrint ? 'checked' : ''}><span><strong>Imprimir automaticamente ao aceitar</strong><small>Sem precisar apertar o botão de impressão manual</small></span></label>
-        <label class="choice-row"><input type="checkbox" data-printer-field="includeCustomer" ${state.printerConfig.includeCustomer ? 'checked' : ''}><span><strong>Incluir nome do cliente</strong></span></label>
-        <label class="choice-row"><input type="checkbox" data-printer-field="includePhone" ${state.printerConfig.includePhone ? 'checked' : ''}><span><strong>Incluir telefone</strong></span></label>
-        <label class="choice-row"><input type="checkbox" data-printer-field="includeAddress" ${state.printerConfig.includeAddress ? 'checked' : ''}><span><strong>Incluir dados de entrega</strong></span></label>
-        <label class="choice-row"><input type="checkbox" data-printer-field="includeItems" ${state.printerConfig.includeItems ? 'checked' : ''}><span><strong>Incluir itens do pedido</strong></span></label>
-        <label class="choice-row"><input type="checkbox" data-printer-field="includeNotes" ${state.printerConfig.includeNotes ? 'checked' : ''}><span><strong>Incluir observações</strong></span></label>
-        <label class="choice-row"><input type="checkbox" data-printer-field="includePayment" ${state.printerConfig.includePayment ? 'checked' : ''}><span><strong>Incluir forma de pagamento</strong></span></label>
-        <label class="choice-row"><input type="checkbox" data-printer-field="includeFooter" ${state.printerConfig.includeFooter ? 'checked' : ''}><span><strong>Mostrar mensagem final</strong></span></label>
-        <label>Mensagem final<textarea data-printer-field="footerText" rows="2">${esc(state.printerConfig.footerText || '')}</textarea></label>
-        <button class="primary-button" data-action="save-printer-config">Salvar impressora</button>
-      </article>
+      <details class="glass-accordion panel operation-settings">
+        <summary>Configuração da comanda</summary>
+        <div class="accordion-body">
+          <label>Tipo de conexão<select data-printer-field="mode">
+            <option value="bluetooth" ${state.printerConfig.mode === 'bluetooth' ? 'selected' : ''}>Bluetooth</option>
+            <option value="cabo" ${state.printerConfig.mode === 'cabo' ? 'selected' : ''}>Cabo / USB</option>
+            <option value="rede" ${state.printerConfig.mode === 'rede' ? 'selected' : ''}>Rede / IP</option>
+            <option value="pdf" ${state.printerConfig.mode === 'pdf' ? 'selected' : ''}>PDF / impressão simples</option>
+          </select></label>
+          <label>Nome da impressora<input data-printer-field="deviceName" value="${esc(state.printerConfig.deviceName || '')}" placeholder="Ex.: Epson TM-T20"></label>
+          <label>Quantas vias saem<input type="number" min="1" max="10" data-printer-field="copies" value="${state.printerConfig.copies || 1}"></label>
+          <label class="choice-row"><input type="checkbox" data-printer-field="autoPrint" ${state.printerConfig.autoPrint ? 'checked' : ''}><span><strong>Imprimir automaticamente ao aceitar</strong><small>Sem precisar apertar o botão de impressão manual</small></span></label>
+          <label class="choice-row"><input type="checkbox" data-printer-field="includeCustomer" ${state.printerConfig.includeCustomer ? 'checked' : ''}><span><strong>Incluir nome do cliente</strong></span></label>
+          <label class="choice-row"><input type="checkbox" data-printer-field="includePhone" ${state.printerConfig.includePhone ? 'checked' : ''}><span><strong>Incluir telefone</strong></span></label>
+          <label class="choice-row"><input type="checkbox" data-printer-field="includeAddress" ${state.printerConfig.includeAddress ? 'checked' : ''}><span><strong>Incluir dados de entrega</strong></span></label>
+          <label class="choice-row"><input type="checkbox" data-printer-field="includeItems" ${state.printerConfig.includeItems ? 'checked' : ''}><span><strong>Incluir itens do pedido</strong></span></label>
+          <label class="choice-row"><input type="checkbox" data-printer-field="includeNotes" ${state.printerConfig.includeNotes ? 'checked' : ''}><span><strong>Incluir observações</strong></span></label>
+          <label class="choice-row"><input type="checkbox" data-printer-field="includePayment" ${state.printerConfig.includePayment ? 'checked' : ''}><span><strong>Incluir forma de pagamento</strong></span></label>
+          <label class="choice-row"><input type="checkbox" data-printer-field="includeFooter" ${state.printerConfig.includeFooter ? 'checked' : ''}><span><strong>Mostrar mensagem final</strong></span></label>
+          <label>Mensagem final<textarea data-printer-field="footerText" rows="2">${esc(state.printerConfig.footerText || '')}</textarea></label>
+          <button class="primary-button" data-action="save-printer-config">Salvar impressora</button>
+        </div>
+      </details>
     </section>
 
   `;
@@ -863,54 +867,63 @@ function settingsView() {
       </div>
     </section>
 
-    <section class="settings-grid">
-      <article class="panel shop-editor">
-        <div class="editor-cover"><span>PedeIA</span></div>
-        <div class="editor-body">
-          <label>Foto da loja<input type="file" accept="image/*" data-shop-photo></label>
-          <label>Nome da loja<input data-setting="name" value="${esc(state.shop.name)}"></label>
-          <label>Descricao<textarea data-setting="description">${esc(state.shop.description)}</textarea></label>
-          <button class="primary-button" data-action="save-shop">Salvar loja</button>
+    <section class="settings-grid accordion-grid">
+      <details class="glass-accordion panel shop-editor">
+        <summary>Dados da loja</summary>
+        <div class="accordion-body editor-body">
+          <div class="editor-cover"><span>PedeIA</span></div>
+          <div class="editor-body">
+            <label>Foto da loja<input type="file" accept="image/*" data-shop-photo></label>
+            <label>Nome da loja<input data-setting="name" value="${esc(state.shop.name)}"></label>
+            <label>Descricao<textarea data-setting="description">${esc(state.shop.description)}</textarea></label>
+            <button class="primary-button" data-action="save-shop">Salvar loja</button>
+          </div>
         </div>
-      </article>
+      </details>
 
-      <article class="panel operation-settings">
-        <p class="eyebrow">FORMAS DE RECEBIMENTO</p>
-        <label class="choice-row"><input type="checkbox" data-delivery="delivery" ${state.delivery.delivery ? 'checked' : ''}><span><strong>Delivery</strong><small>Cliente recebe no endereco informado</small></span></label>
-        <label class="choice-row"><input type="checkbox" data-delivery="pickup" ${state.delivery.pickup ? 'checked' : ''}><span><strong>Retirada no local</strong><small>Cliente busca o pedido na loja</small></span></label>
-        <label>Tempo estimado para delivery<input type="number" min="1" data-delivery-min="deliveryMinutes" value="${state.delivery.deliveryMinutes}"> minutos</label>
-        <label>Tempo estimado para retirada<input type="number" min="1" data-delivery-min="pickupMinutes" value="${state.delivery.pickupMinutes}"> minutos</label>
-        <button class="primary-button" data-action="save-delivery">Salvar tempos</button>
+      <details class="glass-accordion panel operation-settings">
+        <summary>Formas de recebimento</summary>
+        <div class="accordion-body">
+          <label class="choice-row"><input type="checkbox" data-delivery="delivery" ${state.delivery.delivery ? 'checked' : ''}><span><strong>Delivery</strong><small>Cliente recebe no endereco informado</small></span></label>
+          <label class="choice-row"><input type="checkbox" data-delivery="pickup" ${state.delivery.pickup ? 'checked' : ''}><span><strong>Retirada no local</strong><small>Cliente busca o pedido na loja</small></span></label>
+          <label>Tempo estimado para delivery<input type="number" min="1" data-delivery-min="deliveryMinutes" value="${state.delivery.deliveryMinutes}"> minutos</label>
+          <label>Tempo estimado para retirada<input type="number" min="1" data-delivery-min="pickupMinutes" value="${state.delivery.pickupMinutes}"> minutos</label>
+          <button class="primary-button" data-action="save-delivery">Salvar tempos</button>
 
-        <div class="settings-link">
-          <strong>${esc(shopLink())}</strong>
-          <button class="primary-button" data-action="copy">Copiar link</button>
+          <div class="settings-link">
+            <strong>${esc(shopLink())}</strong>
+            <button class="primary-button" data-action="copy">Copiar link</button>
+          </div>
         </div>
-      </article>
+      </details>
 
-      <article class="panel payment-settings">
-        <p class="eyebrow">PAGAMENTOS</p>
-        <label class="choice-row"><input type="checkbox" data-payment-toggle="cash" ${paymentConfig.cash ? 'checked' : ''}><span><strong>Dinheiro</strong><small>Receber em especie</small></span></label>
-        <label class="choice-row"><input type="checkbox" data-payment-toggle="pix" ${paymentConfig.pix ? 'checked' : ''}><span><strong>Pix</strong><small>Transferencia ou QR Code</small></span></label>
-        <label class="choice-row"><input type="checkbox" data-payment-toggle="credit" ${paymentConfig.credit ? 'checked' : ''}><span><strong>Cartao de credito</strong><small>Pagamento com cartão</small></span></label>
-        <label class="choice-row"><input type="checkbox" data-payment-toggle="debit" ${paymentConfig.debit ? 'checked' : ''}><span><strong>Cartao de debito</strong><small>Pagamento com débito</small></span></label>
-        <label>Cartoes aceitos<input data-payment-field="cardTypes" value="${esc(paymentConfig.cardTypes || 'Visa, Mastercard, Elo')}" placeholder="Ex.: Visa, Mastercard, Elo"></label>
-        <label>Acrescimo no cartao (%)<input type="number" min="0" step="0.1" data-payment-field="cardFee" value="${Number(paymentConfig.cardFee || 0)}"></label>
-        <label>Parcelamento maximo<input type="number" min="1" max="12" data-payment-field="maxInstallments" value="${Number(paymentConfig.maxInstallments || 3)}"></label>
-        <label class="choice-row"><input type="checkbox" data-payment-toggle="needsChange" ${paymentConfig.needsChange ? 'checked' : ''}><span><strong>Precisa de troco</strong><small>Cliente pode pagar com mais dinheiro</small></span></label>
-        <label>Troco disponivel para<input data-payment-field="changeFor" value="${esc(paymentConfig.changeFor || 'Até R$ 50,00')}" placeholder="Ex.: até R$ 50,00"></label>
-        <label>Mensagem para o cliente<textarea data-payment-field="customerMessage" rows="2">${esc(paymentConfig.customerMessage || '')}</textarea></label>
-        <button class="primary-button" data-action="save-payment-config">Salvar pagamentos</button>
-      </article>
-
-      <article class="panel schedule-settings">
-        <p class="eyebrow">HORARIOS DE FUNCIONAMENTO</p>
-        <h3>Configure os dias e o horario da semana</h3>
-        <div class="schedule-list">
-          ${scheduleRows}
+      <details class="glass-accordion panel payment-settings">
+        <summary>Pagamentos</summary>
+        <div class="accordion-body">
+          <label class="choice-row"><input type="checkbox" data-payment-toggle="cash" ${paymentConfig.cash ? 'checked' : ''}><span><strong>Dinheiro</strong><small>Receber em especie</small></span></label>
+          <label class="choice-row"><input type="checkbox" data-payment-toggle="pix" ${paymentConfig.pix ? 'checked' : ''}><span><strong>Pix</strong><small>Transferencia ou QR Code</small></span></label>
+          <label class="choice-row"><input type="checkbox" data-payment-toggle="credit" ${paymentConfig.credit ? 'checked' : ''}><span><strong>Cartao de credito</strong><small>Pagamento com cartão</small></span></label>
+          <label class="choice-row"><input type="checkbox" data-payment-toggle="debit" ${paymentConfig.debit ? 'checked' : ''}><span><strong>Cartao de debito</strong><small>Pagamento com débito</small></span></label>
+          <label>Cartoes aceitos<input data-payment-field="cardTypes" value="${esc(paymentConfig.cardTypes || 'Visa, Mastercard, Elo')}" placeholder="Ex.: Visa, Mastercard, Elo"></label>
+          <label>Acrescimo no cartao (%)<input type="number" min="0" step="0.1" data-payment-field="cardFee" value="${Number(paymentConfig.cardFee || 0)}"></label>
+          <label>Parcelamento maximo<input type="number" min="1" max="12" data-payment-field="maxInstallments" value="${Number(paymentConfig.maxInstallments || 3)}"></label>
+          <label class="choice-row"><input type="checkbox" data-payment-toggle="needsChange" ${paymentConfig.needsChange ? 'checked' : ''}><span><strong>Precisa de troco</strong><small>Cliente pode pagar com mais dinheiro</small></span></label>
+          <label>Troco disponivel para<input data-payment-field="changeFor" value="${esc(paymentConfig.changeFor || 'Até R$ 50,00')}" placeholder="Ex.: até R$ 50,00"></label>
+          <label>Mensagem para o cliente<textarea data-payment-field="customerMessage" rows="2">${esc(paymentConfig.customerMessage || '')}</textarea></label>
+          <button class="primary-button" data-action="save-payment-config">Salvar pagamentos</button>
         </div>
-        <button class="primary-button" data-action="save-shop-hours">Salvar horarios</button>
-      </article>
+      </details>
+
+      <details class="glass-accordion panel schedule-settings">
+        <summary>Horários de funcionamento</summary>
+        <div class="accordion-body">
+          <h3>Configure os dias e o horario da semana</h3>
+          <div class="schedule-list">
+            ${scheduleRows}
+          </div>
+          <button class="primary-button" data-action="save-shop-hours">Salvar horarios</button>
+        </div>
+      </details>
     </section>
   `;
 }
@@ -1238,13 +1251,23 @@ function handleAction(event) {
         <h2>Configurar pedidos</h2>
         <p>Escolha se aceita automaticamente e ajuste os prazos.</p>
       </div>
-      <form id="automation-form" class="dialog-form">
+      <form id="automation-form" class="dialog-form automation-form">
         <label class="choice-row">
           <input type="checkbox" name="autoAccept" ${state.delivery.autoAccept ? 'checked' : ''}>
           <span><strong>Aceitar pedidos automaticamente</strong><small>Sem precisar confirmar cada ordem nova</small></span>
         </label>
-        <label>Tempo estimado para retirada<input type="number" min="1" name="pickupMinutes" value="${Number(state.delivery.pickupMinutes || 20)}"></label>
-        <label>Tempo estimado para delivery<input type="number" min="1" name="deliveryMinutes" value="${Number(state.delivery.deliveryMinutes || 45)}"></label>
+
+        <div class="time-grid">
+          <label>
+            <span>Tempo estimado para retirada</span>
+            <input type="number" min="1" name="pickupMinutes" value="${Number(state.delivery.pickupMinutes || 20)}">
+          </label>
+          <label>
+            <span>Tempo estimado para delivery</span>
+            <input type="number" min="1" name="deliveryMinutes" value="${Number(state.delivery.deliveryMinutes || 45)}">
+          </label>
+        </div>
+
         <button class="primary-button" type="submit">Salvar ajustes</button>
       </form>
     `);
