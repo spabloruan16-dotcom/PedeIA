@@ -38,6 +38,18 @@ const blank = {
     deliveryMinutes: 45,
     autoAccept: false
   },
+  paymentConfig: {
+    cash: true,
+    pix: true,
+    credit: true,
+    debit: true,
+    cardTypes: 'Visa, Mastercard, Elo',
+    cardFee: 0,
+    maxInstallments: 3,
+    needsChange: true,
+    changeFor: 'Até R$ 50,00',
+    customerMessage: 'Pagamento disponível em dinheiro, cartão ou pix.'
+  },
   printerConfig: {
     mode: 'cabo',
     deviceName: 'Impressora térmica padrão',
@@ -375,7 +387,17 @@ function loginMerchant(event) {
 
 function nav(view, icon, text, count = '') {
   const badge = Number(count || 0);
-  return `<button class="${state.view === view ? 'active' : ''}" data-view="${view}"><span class="nav-icon ${icon}"></span>${text}${badge > 0 ? `<b class="nav-badge">${badge}</b>` : ''}</button>`;
+  const icons = {
+    home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 9.5V20h14V9.5"></path><path d="M9 20v-6h6v6"></path></svg>',
+    orders: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5h10a2 2 0 0 1 2 2v11.5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2Z"></path><path d="M8 8h8"></path><path d="M8 12h8"></path><path d="M8 16h5"></path></svg>',
+    menu: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M4 12h16"></path><path d="M4 17h16"></path></svg>',
+    categories: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5h8"></path><path d="M6 8.5h12"></path><path d="M4 12.5h16"></path><path d="M8 16.5h8"></path><path d="M11 20.5h2"></path></svg>',
+    chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18.5V7.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H10l-4 3Z"></path><path d="M9 10h6"></path><path d="M9 13h4"></path></svg>',
+    settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.56V20a2 2 0 1 1-4 0v-.08A1.7 1.7 0 0 0 9.7 18.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.7 14.6 1.7 1.7 0 0 0 3.14 13.6H3.1a2 2 0 1 1 0-4h.08A1.7 1.7 0 0 0 4.7 8.4a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.4 4.7 1.7 1.7 0 0 0 9.4 3.14V3.1a2 2 0 1 1 4 0v.08A1.7 1.7 0 0 0 14.3 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.3 8.4a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z"></path></svg>',
+    printers: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4.5h10V8"></path><path d="M7 16.5h10a2 2 0 0 0 2-2V9.5a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2Z"></path><path d="M8 15h8"></path><path d="M8 18.5h8v2.5H8z"></path></svg>'
+  };
+  const svg = icons[icon] || icons.home;
+  return `<button class="${state.view === view ? 'active' : ''}" data-view="${view}"><span class="nav-icon ${icon}">${svg}</span>${text}${badge > 0 ? `<b class="nav-badge">${badge}</b>` : ''}</button>`;
 }
 
 function unreadMessagesCount(type = 'merchant') {
@@ -392,7 +414,10 @@ function merchantPanel() {
   app.innerHTML = `
     <div class="shell">
       <aside class="sidebar">
-        ${brand()}
+        <div style="display:flex; align-items:center; gap:10px;">
+          ${brand()}
+          <button class="mobile-menu-toggle" aria-label="Abrir menu" type="button"><span></span></button>
+        </div>
         <div class="shop-mini">
           <div class="shop-avatar">${state.shop.photo ? `<img src="${state.shop.photo}" alt="">` : esc(state.shop.name[0])}</div>
           <div>
@@ -816,6 +841,19 @@ function settingsView() {
     `;
   }).join('');
 
+  const paymentConfig = state.paymentConfig || {
+    cash: true,
+    pix: true,
+    credit: true,
+    debit: true,
+    cardTypes: 'Visa, Mastercard, Elo',
+    cardFee: 0,
+    maxInstallments: 3,
+    needsChange: true,
+    changeFor: 'Até R$ 50,00',
+    customerMessage: 'Pagamento disponível em dinheiro, cartão ou pix.'
+  };
+
   return `
     <section class="page-intro">
       <div>
@@ -848,6 +886,21 @@ function settingsView() {
           <strong>${esc(shopLink())}</strong>
           <button class="primary-button" data-action="copy">Copiar link</button>
         </div>
+      </article>
+
+      <article class="panel payment-settings">
+        <p class="eyebrow">PAGAMENTOS</p>
+        <label class="choice-row"><input type="checkbox" data-payment-toggle="cash" ${paymentConfig.cash ? 'checked' : ''}><span><strong>Dinheiro</strong><small>Receber em especie</small></span></label>
+        <label class="choice-row"><input type="checkbox" data-payment-toggle="pix" ${paymentConfig.pix ? 'checked' : ''}><span><strong>Pix</strong><small>Transferencia ou QR Code</small></span></label>
+        <label class="choice-row"><input type="checkbox" data-payment-toggle="credit" ${paymentConfig.credit ? 'checked' : ''}><span><strong>Cartao de credito</strong><small>Pagamento com cartão</small></span></label>
+        <label class="choice-row"><input type="checkbox" data-payment-toggle="debit" ${paymentConfig.debit ? 'checked' : ''}><span><strong>Cartao de debito</strong><small>Pagamento com débito</small></span></label>
+        <label>Cartoes aceitos<input data-payment-field="cardTypes" value="${esc(paymentConfig.cardTypes || 'Visa, Mastercard, Elo')}" placeholder="Ex.: Visa, Mastercard, Elo"></label>
+        <label>Acrescimo no cartao (%)<input type="number" min="0" step="0.1" data-payment-field="cardFee" value="${Number(paymentConfig.cardFee || 0)}"></label>
+        <label>Parcelamento maximo<input type="number" min="1" max="12" data-payment-field="maxInstallments" value="${Number(paymentConfig.maxInstallments || 3)}"></label>
+        <label class="choice-row"><input type="checkbox" data-payment-toggle="needsChange" ${paymentConfig.needsChange ? 'checked' : ''}><span><strong>Precisa de troco</strong><small>Cliente pode pagar com mais dinheiro</small></span></label>
+        <label>Troco disponivel para<input data-payment-field="changeFor" value="${esc(paymentConfig.changeFor || 'Até R$ 50,00')}" placeholder="Ex.: até R$ 50,00"></label>
+        <label>Mensagem para o cliente<textarea data-payment-field="customerMessage" rows="2">${esc(paymentConfig.customerMessage || '')}</textarea></label>
+        <button class="primary-button" data-action="save-payment-config">Salvar pagamentos</button>
       </article>
 
       <article class="panel schedule-settings">
@@ -1067,9 +1120,26 @@ function bindMerchant() {
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.onclick = () => {
       state.view = button.dataset.view;
+      const nav = document.querySelector('.side-nav');
+      const toggle = document.querySelector('.mobile-menu-toggle');
+      if (nav && nav.classList.contains('open')) {
+        nav.classList.remove('open');
+      }
+      if (toggle) {
+        toggle.classList.remove('active');
+      }
       renderSaved();
     };
   });
+
+  const mobileToggle = document.querySelector('.mobile-menu-toggle');
+  const sideNav = document.querySelector('.side-nav');
+  if (mobileToggle && sideNav) {
+    mobileToggle.onclick = () => {
+      const isOpen = sideNav.classList.toggle('open');
+      mobileToggle.classList.toggle('active', isOpen);
+    };
+  }
 
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.onclick = handleAction;
@@ -1143,6 +1213,22 @@ function handleAction(event) {
     document.querySelectorAll('[data-delivery-min]').forEach((input) => {
       state.delivery[input.dataset.deliveryMin] = Number(input.value || 0);
     });
+    return renderSaved();
+  }
+  if (action === 'save-payment-config') {
+    const paymentConfig = state.paymentConfig || {};
+    document.querySelectorAll('[data-payment-toggle]').forEach((input) => {
+      paymentConfig[input.dataset.paymentToggle] = input.checked;
+    });
+    document.querySelectorAll('[data-payment-field]').forEach((input) => {
+      const value = input.value;
+      if (['cardFee', 'maxInstallments'].includes(input.dataset.paymentField)) {
+        paymentConfig[input.dataset.paymentField] = Number(value || 0);
+      } else {
+        paymentConfig[input.dataset.paymentField] = value;
+      }
+    });
+    state.paymentConfig = paymentConfig;
     return renderSaved();
   }
   if (action === 'edit-order-automation') {
@@ -1562,10 +1648,36 @@ function cartDialog() {
 
 function checkoutDialog() {
   const cached = JSON.parse(localStorage.getItem(clientKey) || 'null') || {};
+  const paymentConfig = state.paymentConfig || {
+    cash: true,
+    pix: true,
+    credit: true,
+    debit: true,
+    cardTypes: 'Visa, Mastercard, Elo',
+    cardFee: 0,
+    maxInstallments: 3,
+    needsChange: true,
+    changeFor: 'Até R$ 50,00',
+    customerMessage: 'Pagamento disponível em dinheiro, cartão ou pix.'
+  };
+
+  const paymentOptions = [];
+  if (paymentConfig.cash) paymentOptions.push('<option value="Dinheiro">Dinheiro</option>');
+  if (paymentConfig.pix) paymentOptions.push('<option value="Pix">Pix</option>');
+  if (paymentConfig.credit) paymentOptions.push(`<option value="Cartão de crédito">Cartão de crédito (${paymentConfig.cardTypes || 'Visa, Mastercard, Elo'})</option>`);
+  if (paymentConfig.debit) paymentOptions.push(`<option value="Cartão de débito">Cartão de débito (${paymentConfig.cardTypes || 'Visa, Mastercard, Elo'})</option>`);
+  if (!paymentOptions.length) paymentOptions.push('<option value="Pix">Pix</option>');
+
   const modes = [
     state.delivery.delivery ? '<option value="delivery">Entrega</option>' : '',
     state.delivery.pickup ? '<option value="pickup">Retirada no local</option>' : ''
   ].join('');
+
+  const paymentExtra = `
+    ${paymentConfig.customerMessage ? `<small class="payment-message">${esc(paymentConfig.customerMessage)}</small>` : ''}
+    ${paymentConfig.cardFee > 0 ? `<small class="payment-message">Acréscimo no cartão: ${Number(paymentConfig.cardFee)}%</small>` : ''}
+    ${paymentConfig.maxInstallments ? `<small class="payment-message">Parcelamento até ${Number(paymentConfig.maxInstallments)}x sem juros.</small>` : ''}
+  `;
 
   showDialog(`
     <div class="dialog-head">
@@ -1578,12 +1690,33 @@ function checkoutDialog() {
       <label>Telefone<input name="phone" required value="${esc(cached.phone || '')}" placeholder="(00) 00000-0000"></label>
       <label>Forma de recebimento<select name="fulfillment">${modes}</select></label>
       <label class="address-field">Endereco de entrega<input name="address" value="${esc(cached.address || '')}" placeholder="Rua, numero e complemento"></label>
-      <label>Pagamento<select name="payment"><option>Pix</option><option>Cartao na entrega</option><option>Dinheiro</option></select></label>
+      <label>Pagamento<select name="payment">${paymentOptions.join('')}</select></label>
+      ${paymentExtra}
+      <div class="payment-extra-row" id="payment-extra-row"></div>
       <button class="primary-button">Enviar pedido</button>
     </form>
   `);
 
   const form = document.querySelector('#checkout-form');
+  const paymentSelect = form?.querySelector('[name="payment"]');
+  const paymentExtraRow = form?.querySelector('#payment-extra-row');
+
+  const refreshPaymentFields = () => {
+    if (!paymentSelect || !paymentExtraRow) return;
+    const selected = paymentSelect.value;
+    const paymentLabel = selected === 'Dinheiro' && paymentConfig.needsChange ? `
+      <label class="choice-row payment-choice-row"><input type="checkbox" name="needsChange"><span><strong>Precisa de troco</strong><small>Troco para ${esc(paymentConfig.changeFor || 'até R$ 50,00')}</small></span></label>
+    ` : selected === 'Pix' ? `
+      <small class="payment-note">Pagamento por Pix. O vendedor confirma o recebimento ao receber a transferência.</small>
+    ` : selected.includes('Cartão') ? `
+      <small class="payment-note">Cartões aceitos: ${esc(paymentConfig.cardTypes || 'Visa, Mastercard, Elo')}. ${paymentConfig.cardFee > 0 ? `Acréscimo de ${Number(paymentConfig.cardFee)}%.` : 'Sem acréscimo.'}</small>
+    ` : '';
+    paymentExtraRow.innerHTML = paymentLabel;
+  };
+
+  paymentSelect?.addEventListener('change', refreshPaymentFields);
+  refreshPaymentFields();
+
   form.onsubmit = (event) => {
     event.preventDefault();
     const data = new FormData(form);
@@ -1601,6 +1734,9 @@ function checkoutDialog() {
       notify('Informe seu nome e telefone para continuar.');
       return;
     }
+
+    const payment = String(data.get('payment') || 'Pix');
+    const paymentNote = data.get('needsChange') ? 'Troco solicitado' : '';
 
     const total = state.cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
     const minutes = fulfillment === 'delivery' ? Number(state.delivery.deliveryMinutes || 45) : Number(state.delivery.pickupMinutes || 20);
@@ -1620,7 +1756,7 @@ function checkoutDialog() {
       customer,
       phone,
       address,
-      payment: String(data.get('payment') || 'Pix'),
+      payment: paymentNote ? `${payment} · ${paymentNote}` : payment,
       fulfillment,
       status: state.delivery.autoAccept ? 'Em preparo' : 'Aguardando',
       total,
@@ -1692,6 +1828,24 @@ document.addEventListener('change', (event) => {
     state.delivery.autoAccept = event.target.checked;
     save();
     render();
+  }
+
+  if (event.target.matches('[data-payment-toggle]')) {
+    const field = event.target.dataset.paymentToggle;
+    state.paymentConfig = state.paymentConfig || {};
+    state.paymentConfig[field] = event.target.checked;
+    save();
+  }
+
+  if (event.target.matches('[data-payment-field]')) {
+    const field = event.target.dataset.paymentField;
+    state.paymentConfig = state.paymentConfig || {};
+    if (['cardFee', 'maxInstallments'].includes(field)) {
+      state.paymentConfig[field] = Number(event.target.value || 0);
+    } else {
+      state.paymentConfig[field] = event.target.value;
+    }
+    save();
   }
 
   if (event.target.matches('[data-printer-field]')) {
