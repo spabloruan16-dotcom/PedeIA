@@ -2,15 +2,15 @@
   "view": "dashboard",
   "customerView": "menu",
   "merchant": {
-    "name": "Maria",
-    "email": "maria@test.com",
+    "name": "João da Silva",
+    "email": "joao@exemplo.com",
     "password": "123456"
   },
   "shop": {
-    "name": "Loja da Maria",
-    "type": "Restaurante",
-    "publicId": "loja-da-maria-2s0cm",
-    "description": "Adicione uma descricao para apresentar seu comercio.",
+    "name": "Brasa & Massa",
+    "type": "Hamburgueria",
+    "publicId": "brasa-massa-demo",
+    "description": "Hamburgueres artesanais, porções e bebidas para quem curte sabor de verdade.",
     "photo": "",
     "isOpen": true,
     "schedule": {
@@ -51,8 +51,40 @@
       }
     }
   },
-  "categories": [],
-  "products": [],
+  "categories": [
+    "Lanches",
+    "Porções",
+    "Bebidas"
+  ],
+  "products": [
+    {
+      "id": 1,
+      "name": "X-Bacon",
+      "category": "Lanches",
+      "description": "Pão, burger, bacon, queijo e molho da casa.",
+      "price": 32.9,
+      "available": true,
+      "photo": ""
+    },
+    {
+      "id": 2,
+      "name": "Batata Chedar",
+      "category": "Porções",
+      "description": "Porção crocante com cheddar e cebola.",
+      "price": 24.5,
+      "available": true,
+      "photo": ""
+    },
+    {
+      "id": 3,
+      "name": "Refrigerante 600ml",
+      "category": "Bebidas",
+      "description": "Escolha seu sabor favorito.",
+      "price": 8.5,
+      "available": true,
+      "photo": ""
+    }
+  ],
   "orders": [],
   "ratings": [],
   "messages": [],
@@ -63,7 +95,8 @@
     "pickup": true,
     "delivery": true,
     "pickupMinutes": 20,
-    "deliveryMinutes": 45
+    "deliveryMinutes": 45,
+    "autoAccept": false
   },
   "printerConfig": {
     "mode": "cabo",

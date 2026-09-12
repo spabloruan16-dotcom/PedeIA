@@ -176,6 +176,12 @@ function merchantLogged() {
   return sessionStorage.getItem(sessionKey) === 'active';
 }
 
+function isTypingInFormField() {
+  const active = document.activeElement;
+  if (!active) return false;
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
+}
+
 function brand() {
   return '<a class="brand" href="/"><span class="brand-mark">P</span><span class="brand-word"><span class="brand-pede">Pede</span><span class="brand-ia">IA</span></span></a>';
 }
@@ -240,13 +246,11 @@ function startLiveRefresh() {
       return;
     }
 
+    if (!merchantLogged()) return;
+
     if (state.merchant && state.shop && app) {
       await syncServerState();
-      if (merchantLogged()) {
-        render();
-      } else if (document.visibilityState === 'visible') {
-        render();
-      }
+      render();
     }
   }, 1500);
 }
@@ -261,9 +265,9 @@ function authView() {
           <h1>Seu negocio.<br><em>Do seu jeito.</em></h1>
           <p>Uma central bonita para vender, organizar pedidos e conversar com quem escolheu sua loja.</p>
           <div class="art-tiles">
-            <div class="art-tile burger-tile"></div>
-            <div class="art-tile drink-tile"></div>
-            <div class="art-tile chart-tile"></div>
+            <img class="art-tile art-image burger-tile" src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQx5ZdINuHHoNG47K6B-Ar1QBdo3XxJw8Nwome2Ro930g&s=10" alt="Logo 1" />
+            <img class="art-tile art-image drink-tile" src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTLOerUt7fsXUW6-etNYl-Lx7ooiwNziX6iaMuHw3J1sQ&s=10" alt="Logo 2" />
+            <img class="art-tile art-image chart-tile" src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcT33wIW5zeiizYvrg3nzGPz7CwXWu5enKWP3RABoz4XCw&s=10" alt="Logo 3" />
           </div>
         </div>
       </div>
