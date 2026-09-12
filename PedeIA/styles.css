@@ -59,31 +59,15 @@
   text-align:center;
 }
 .art-tiles{
-  display:flex;
-  align-items:end;
-  gap:14px;
-margin-top:40px}
-.art-tile{
-  width:64px;
-  height:64px;
-  border-radius:22px;
-  position:relative;
-  box-shadow:0 20px 40px rgba(17,24,39,.25);
-  overflow:hidden;
-  object-fit:cover;
-  display:block;
-  background:#fff;
-  border:1px solid rgba(255,255,255,.12)}
-.art-image{
-  display:block;
-  object-fit:cover;
-  background:#fff}
-.burger-tile{
-  margin-bottom:0}
-.drink-tile{
-  margin-bottom:23px}
+  display:none;
+}
+.art-tile,
+.art-image,
+.burger-tile,
+.drink-tile,
 .chart-tile{
-  margin-bottom:0}
+  display:none;
+}
 
 /* =========================================================
    02) Barra de ferramentas do dashboard e filtros
@@ -188,14 +172,15 @@ color:#2f343d}
 .toggle-pill input{
   appearance:none;
   position:relative;
-  width:44px;
-  height:24px;
+  width:46px;
+  height:26px;
   border-radius:999px;
-  background:#e8e1de;
-  border:0;
+  background:linear-gradient(180deg,#eae3df,#e4ddd8);
+  border:1px solid rgba(208,202,197,.9);
   margin:0;
   cursor:pointer;
-  transition:background .2s ease;
+  transition:all .22s ease;
+  box-shadow:inset 0 2px 6px rgba(31,36,48,.06);
 }
 .toggle-pill input::before{
   content:"";
@@ -203,14 +188,16 @@ color:#2f343d}
   width:18px;
   height:18px;
   border-radius:50%;
-  background:#fff;
+  background:linear-gradient(180deg,#fff,#f5f1ef);
   left:3px;
   top:3px;
-  box-shadow:0 2px 8px rgba(31,36,48,.18);
-  transition:transform .2s ease;
+  box-shadow:0 3px 9px rgba(31,36,48,.18), inset 0 1px 0 rgba(255,255,255,.9);
+  transition:transform .22s ease;
 }
 .toggle-pill input:checked{
-  background:var(--coral);
+  background:linear-gradient(135deg,#ffb56f,#f4512c);
+  border-color:rgba(244,81,44,.4);
+  box-shadow:0 8px 16px rgba(244,81,44,.18);
 }
 .toggle-pill input:checked::before{
   transform:translateX(20px);
@@ -384,12 +371,49 @@ color:#3c9860}
   display:flex!important;
   gap:12px;
   align-items:center;
-  border:1px solid var(--line);
-  border-radius:10px;
-  padding:12px;
-margin:9px 0!important}
-.choice-row input{
-accent-color:var(--coral)}
+  border:1px solid rgba(232,226,221,.9);
+  border-radius:12px;
+  padding:12px 14px;
+  margin:9px 0!important;
+  background:linear-gradient(180deg, rgba(255,255,255,.96), rgba(250,247,244,.92));
+  box-shadow:0 8px 18px rgba(31,36,48,.03);
+}
+.choice-row input[type="checkbox"]{
+  appearance:none;
+  -webkit-appearance:none;
+  width:22px;
+  height:22px;
+  min-width:22px;
+  min-height:22px;
+  border-radius:8px;
+  border:1.5px solid rgba(185,178,172,.9);
+  background:linear-gradient(180deg,#fff,#f7f3f1);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.8);
+  display:grid;
+  place-items:center;
+  cursor:pointer;
+  transition:all .2s ease;
+  position:relative;
+  margin:0;
+  flex:none;
+}
+.choice-row input[type="checkbox"]::after{
+  content:"";
+  width:10px;
+  height:10px;
+  border-radius:4px;
+  background:linear-gradient(135deg,#ffb56f,#f4512c);
+  transform:scale(0);
+  transition:transform .18s ease;
+  box-shadow:0 4px 10px rgba(244,81,44,.25);
+}
+.choice-row input[type="checkbox"]:checked{
+  border-color:rgba(244,81,44,.5);
+  box-shadow:0 0 0 4px rgba(244,81,44,.08), inset 0 1px 0 rgba(255,255,255,.9);
+}
+.choice-row input[type="checkbox"]:checked::after{
+  transform:scale(1);
+}
 .choice-row span{
 flex:1}
 .choice-row strong,.choice-row small{
@@ -987,13 +1011,19 @@ border-color:var(--coral)}
   font-size:11px;
   font-weight:700;
 margin:14px 0}
-.auth-form input,.auth-form select,.dialog-form input,.dialog-form select,.dialog-form textarea{
+.auth-form input,.auth-form select,.dialog-form input,.dialog-form select,.dialog-form textarea,
+.editor-body input,.editor-body textarea,.checkout input,
+.payment-settings input,
+.payment-settings textarea,
+.operation-settings input[type=number],
+.operation-settings select,
+.search-field input{
   display:block;
   width:100%;
   padding:13px 14px;
-  border:1px solid #e4e0dc;
-  border-radius:10px;
-  background:#fff;
+  border:1px solid rgba(227,221,216,.9);
+  border-radius:12px;
+  background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(250,247,245,.96));
   color:var(--ink);
   outline:0;
   margin-top:6px;
@@ -1003,13 +1033,23 @@ margin:14px 0}
   max-width:100%;
   position:relative;
   z-index:1;
-transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease}
-.auth-form input:focus,.auth-form select:focus,.dialog-form input:focus,.dialog-form select:focus,.dialog-form textarea:focus{
-  border-color:var(--coral);
-  box-shadow:0 0 0 3px #f4512c15;
+  transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease, background .18s ease;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.8), 0 8px 18px rgba(31,36,48,.02);
+}
+.auth-form input:focus,.auth-form select:focus,.dialog-form input:focus,.dialog-form select:focus,.dialog-form textarea:focus,
+.editor-body input:focus,.editor-body textarea:focus,.checkout input:focus,
+.payment-settings input:focus,
+.payment-settings textarea:focus,
+.operation-settings input[type=number]:focus,
+.operation-settings select:focus,
+.search-field input:focus{
+  border-color:rgba(244,81,44,.5);
+  box-shadow:0 0 0 4px rgba(244,81,44,.08), inset 0 1px 0 rgba(255,255,255,.9);
   position:relative;
   z-index:2;
-transform:none}
+  transform:none;
+  background:linear-gradient(180deg, rgba(255,255,255,1), rgba(255,249,245,.98));
+}
 .auth-submit{
   width:100%;
   margin-top:10px;
@@ -1220,8 +1260,31 @@ overflow:auto}
   height:22px;
   min-height:22px;
   margin:2px 0 0;
-  accent-color:var(--coral);
   flex:none;
+  appearance:none;
+  -webkit-appearance:none;
+  border-radius:8px;
+  border:1.5px solid rgba(185,178,172,.9);
+  background:linear-gradient(180deg,#fff,#f7f3f1);
+  display:grid;
+  place-items:center;
+  position:relative;
+}
+.automation-form .choice-row input::after{
+  content:"";
+  width:10px;
+  height:10px;
+  border-radius:4px;
+  background:linear-gradient(135deg,#ffb56f,#f4512c);
+  transform:scale(0);
+  transition:transform .18s ease;
+}
+.automation-form .choice-row input:checked{
+  border-color:rgba(244,81,44,.5);
+  box-shadow:0 0 0 4px rgba(244,81,44,.08);
+}
+.automation-form .choice-row input:checked::after{
+  transform:scale(1);
 }
 
 .automation-form .choice-row span{
@@ -2249,14 +2312,17 @@ margin:14px 0}
 .editor-body input,.editor-body textarea,.checkout input{
   display:block;
   width:100%;
-  border:1px solid #e8e4df;
-  border-radius:8px;
-  padding:11px;
+  border:1px solid rgba(232,228,223,.9);
+  border-radius:12px;
+  padding:11px 12px;
   margin-top:6px;
   color:var(--ink);
   outline:0;
   font-size:12px;
-resize:vertical}
+  resize:vertical;
+  background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(250,247,245,.95));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.7);
+}
 .editor-body textarea{
 min-height:75px}
 .payment-settings{
@@ -2278,15 +2344,17 @@ min-height:75px}
 .payment-settings textarea{
   display:block;
   width:100%;
-  border:1px solid #e8e4df;
-  border-radius:8px;
-  padding:11px;
+  border:1px solid rgba(232,228,223,.9);
+  border-radius:12px;
+  padding:11px 12px;
   margin-top:6px;
   color:var(--ink);
   outline:0;
   font-size:12px;
   resize:vertical;
   box-sizing:border-box;
+  background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(250,247,245,.95));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.7);
 }
 .payment-message,
 .payment-note{

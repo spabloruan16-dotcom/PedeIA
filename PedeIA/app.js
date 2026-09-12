@@ -21,6 +21,9 @@ function defaultShopSchedule() {
 const blank = {
   view: 'dashboard',
   customerView: 'menu',
+  ui: {
+    openSections: {}
+  },
   merchant: null,
   shop: null,
   categories: [],
@@ -82,10 +85,22 @@ function fingerprint(value) {
 function readState() {
   try {
     const stored = JSON.parse(localStorage.getItem(stateKey) || 'null');
-    return { ...blank, ...(stored || {}) };
+    const merged = { ...blank, ...(stored || {}) };
+    merged.ui = { openSections: { ...(blank.ui.openSections || {}), ...(stored?.ui?.openSections || {}) } };
+    return merged;
   } catch {
     return structuredClone(blank);
   }
+}
+
+function setAccordionState(key, isOpen) {
+  state.ui = state.ui || { openSections: {} };
+  state.ui.openSections = state.ui.openSections || {};
+  state.ui.openSections[key] = !!isOpen;
+}
+
+function isAccordionOpen(key) {
+  return Boolean(state.ui?.openSections?.[key]);
 }
 
 async function syncServerState() {
@@ -276,11 +291,6 @@ function authView() {
           <span class="eyebrow">PARA QUEM FAZ ACONTECER</span>
           <h1>Seu negocio.<br><em>Do seu jeito.</em></h1>
           <p>Uma central bonita para vender, organizar pedidos e conversar com quem escolheu sua loja.</p>
-          <div class="art-tiles">
-            <img class="art-tile art-image burger-tile" src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQx5ZdINuHHoNG47K6B-Ar1QBdo3XxJw8Nwome2Ro930g&s=10" alt="Logo 1" />
-            <img class="art-tile art-image drink-tile" src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTLOerUt7fsXUW6-etNYl-Lx7ooiwNziX6iaMuHw3J1sQ&s=10" alt="Logo 2" />
-            <img class="art-tile art-image chart-tile" src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcT33wIW5zeiizYvrg3nzGPz7CwXWu5enKWP3RABoz4XCw&s=10" alt="Logo 3" />
-          </div>
         </div>
       </div>
       <section class="auth-card">
@@ -783,7 +793,7 @@ function printersView() {
     </section>
 
     <section class="settings-grid accordion-grid">
-      <details class="glass-accordion panel shop-editor" >
+      <details class="glass-accordion panel shop-editor" data-accordion="printers-devices" ${isAccordionOpen('printers-devices') ? 'open' : ''}>
         <summary>Dispositivos cadastrados</summary>
         <div class="accordion-body editor-body">
           <div class="editor-cover"><span>Print</span></div>
@@ -801,7 +811,7 @@ function printersView() {
         </div>
       </details>
 
-      <details class="glass-accordion panel operation-settings">
+      <details class="glass-accordion panel operation-settings" data-accordion="printers-config" ${isAccordionOpen('printers-config') ? 'open' : ''}>
         <summary>Configuração da comanda</summary>
         <div class="accordion-body">
           <label>Tipo de conexão<select data-printer-field="mode">
@@ -868,7 +878,7 @@ function settingsView() {
     </section>
 
     <section class="settings-grid accordion-grid">
-      <details class="glass-accordion panel shop-editor">
+      <details class="glass-accordion panel shop-editor" data-accordion="shop-data" ${isAccordionOpen('shop-data') ? 'open' : ''}>
         <summary>Dados da loja</summary>
         <div class="accordion-body editor-body">
           <div class="editor-cover"><span>PedeIA</span></div>
@@ -881,7 +891,7 @@ function settingsView() {
         </div>
       </details>
 
-      <details class="glass-accordion panel operation-settings">
+      <details class="glass-accordion panel operation-settings" data-accordion="shop-receipt" ${isAccordionOpen('shop-receipt') ? 'open' : ''}>
         <summary>Formas de recebimento</summary>
         <div class="accordion-body">
           <label class="choice-row"><input type="checkbox" data-delivery="delivery" ${state.delivery.delivery ? 'checked' : ''}><span><strong>Delivery</strong><small>Cliente recebe no endereco informado</small></span></label>
@@ -897,7 +907,7 @@ function settingsView() {
         </div>
       </details>
 
-      <details class="glass-accordion panel payment-settings">
+      <details class="glass-accordion panel payment-settings" data-accordion="shop-payment" ${isAccordionOpen('shop-payment') ? 'open' : ''}>
         <summary>Pagamentos</summary>
         <div class="accordion-body">
           <label class="choice-row"><input type="checkbox" data-payment-toggle="cash" ${paymentConfig.cash ? 'checked' : ''}><span><strong>Dinheiro</strong><small>Receber em especie</small></span></label>
@@ -914,7 +924,7 @@ function settingsView() {
         </div>
       </details>
 
-      <details class="glass-accordion panel schedule-settings">
+      <details class="glass-accordion panel schedule-settings" data-accordion="shop-hours" ${isAccordionOpen('shop-hours') ? 'open' : ''}>
         <summary>Horários de funcionamento</summary>
         <div class="accordion-body">
           <h3>Configure os dias e o horario da semana</h3>
@@ -1885,6 +1895,16 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('click', (event) => {
+  const summary = event.target.closest('summary');
+  if (summary && summary.parentElement?.matches('.glass-accordion')) {
+    const key = summary.parentElement.dataset.accordion;
+    if (key) {
+      setAccordionState(key, summary.parentElement.open);
+      save();
+    }
+    return;
+  }
+
   const viewButton = event.target.closest('[data-customer-view]');
   if (viewButton) {
     state.customerView = viewButton.dataset.customerView;
