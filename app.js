@@ -1982,9 +1982,16 @@ document.addEventListener('change', (event) => {
 document.addEventListener('click', (event) => {
   const summary = event.target.closest('summary');
   if (summary && summary.parentElement?.matches('.glass-accordion')) {
-    const key = summary.parentElement.dataset.accordion;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const details = summary.parentElement;
+    const key = details.dataset.accordion;
+    const shouldOpen = !details.open;
+    details.open = shouldOpen;
+
     if (key) {
-      setAccordionState(key, summary.parentElement.open);
+      setAccordionState(key, shouldOpen);
       save();
     }
     return;
