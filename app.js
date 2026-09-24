@@ -3,25 +3,6 @@ const toast = document.querySelector('#toast');
 const stateKey = 'pedeia-state-v5';
 const sessionKey = 'pedeia-merchant-session';
 const clientKey = 'pedeia-client-profile-v1';
-const authTokenKey = 'pedeia-auth-token';
-
-function getAuthToken() {
-  return localStorage.getItem(authTokenKey) || '';
-}
-
-function setAuthToken(token) {
-  if (token) localStorage.setItem(authTokenKey, token);
-  else localStorage.removeItem(authTokenKey);
-}
-
-async function apiRequest(url, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  const token = getAuthToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  return fetch(url, { ...options, headers });
-}
 
 const weekDays = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
 
@@ -40,9 +21,6 @@ function defaultShopSchedule() {
 const blank = {
   view: 'dashboard',
   customerView: 'menu',
-  ui: {
-    openSections: {}
-  },
   merchant: null,
   shop: null,
   categories: [],
@@ -59,18 +37,6 @@ const blank = {
     pickupMinutes: 20,
     deliveryMinutes: 45,
     autoAccept: false
-  },
-  paymentConfig: {
-    cash: true,
-    pix: true,
-    credit: true,
-    debit: true,
-    cardTypes: 'Visa, Mastercard, Elo',
-    cardFee: 0,
-    maxInstallments: 3,
-    needsChange: true,
-    changeFor: 'Até R$ 50,00',
-    customerMessage: 'Pagamento disponível em dinheiro, cartão ou pix.'
   },
   printerConfig: {
     mode: 'cabo',
@@ -104,22 +70,10 @@ function fingerprint(value) {
 function readState() {
   try {
     const stored = JSON.parse(localStorage.getItem(stateKey) || 'null');
-    const merged = { ...blank, ...(stored || {}) };
-    merged.ui = { openSections: { ...(blank.ui.openSections || {}), ...(stored?.ui?.openSections || {}) } };
-    return merged;
+    return { ...blank, ...(stored || {}) };
   } catch {
     return structuredClone(blank);
   }
-}
-
-function setAccordionState(key, isOpen) {
-  state.ui = state.ui || { openSections: {} };
-  state.ui.openSections = state.ui.openSections || {};
-  state.ui.openSections[key] = !!isOpen;
-}
-
-function isAccordionOpen(key) {
-  return Boolean(state.ui?.openSections?.[key]);
 }
 
 async function syncServerState() {
@@ -222,12 +176,6 @@ function merchantLogged() {
   return sessionStorage.getItem(sessionKey) === 'active';
 }
 
-function isTypingInFormField() {
-  const active = document.activeElement;
-  if (!active) return false;
-  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
-}
-
 function brand() {
   return '<a class="brand" href="/"><span class="brand-mark">P</span><span class="brand-word"><span class="brand-pede">Pede</span><span class="brand-ia">IA</span></span></a>';
 }
@@ -292,11 +240,13 @@ function startLiveRefresh() {
       return;
     }
 
-    if (!merchantLogged()) return;
-
     if (state.merchant && state.shop && app) {
       await syncServerState();
-      render();
+      if (merchantLogged()) {
+        render();
+      } else if (document.visibilityState === 'visible') {
+        render();
+      }
     }
   }, 1500);
 }
@@ -310,6 +260,11 @@ function authView() {
           <span class="eyebrow">PARA QUEM FAZ ACONTECER</span>
           <h1>Seu negocio.<br><em>Do seu jeito.</em></h1>
           <p>Uma central bonita para vender, organizar pedidos e conversar com quem escolheu sua loja.</p>
+          <div class="art-tiles">
+            <div class="art-tile burger-tile"></div>
+            <div class="art-tile drink-tile"></div>
+            <div class="art-tile chart-tile"></div>
+          </div>
         </div>
       </div>
       <section class="auth-card">
@@ -356,9 +311,76 @@ function switchAuth(type) {
   document.querySelector('#login-form').classList.toggle('hidden', type !== 'login');
 }
 
+// ---------------------------------------------------------------------------
+// ASSINATURA
+// Consulta o status da assinatura do comerciante no Supabase antes de deixar
+// o fluxo avancar para a criacao/abertura da loja. Se a funcao RPC nao
+// existir ou o Supabase nao responder (ex.: ambiente local sem conexao),
+// tratamos como "nao foi possivel verificar" e deixamos o fluxo seguir, para
+// nao travar o protótipo quando o backend de assinaturas nao estiver ligado.
+// ---------------------------------------------------------------------------
+
+const expiredStatuses = ['expirada', 'expired', 'vencida', 'cancelada', 'inativa', 'inactive'];
+
+async function fetchSubscriptionStatus(identifier) {
+  if (typeof supabaseClient === 'undefined' || !supabaseClient?.rpc) return null;
+
+  try {
+    const { data, error } = await supabaseClient.rpc('verificar_assinatura_comerciante', {
+      p_comerciante_id: identifier
+    });
+
+    if (error) {
+      console.error('Falha ao verificar assinatura:', error);
+      return null;
+    }
+
+    if (typeof data === 'string') return data.toLowerCase();
+    if (Array.isArray(data) && data[0]) return String(data[0].status_assinatura || data[0].status || '').toLowerCase();
+    if (data && typeof data === 'object') return String(data.status_assinatura || data.status || '').toLowerCase();
+    return null;
+  } catch (err) {
+    console.error('Falha ao verificar assinatura:', err);
+    return null;
+  }
+}
+
+function isSubscriptionExpired(status) {
+  return !!status && expiredStatuses.includes(status);
+}
+
+function subscriptionExpiredView() {
+  app.innerHTML = `
+    <main class="auth-screen">
+      <div class="auth-art">
+        ${brand()}
+        <div class="art-copy">
+          <span class="eyebrow">ASSINATURA</span>
+          <h1>Quase la.</h1>
+          <p>Falta so renovar para continuar configurando sua loja.</p>
+        </div>
+      </div>
+      <section class="auth-card">
+        <span class="eyebrow">ASSINATURA EXPIRADA</span>
+        <h2>Sua assinatura esta expirada</h2>
+        <p>Renove sua assinatura para continuar e configurar sua loja.</p>
+        <button class="primary-button" data-action="voltar-login">Voltar</button>
+      </section>
+    </main>
+  `;
+
+  document.querySelector('[data-action="voltar-login"]').onclick = () => {
+    sessionStorage.removeItem(sessionKey);
+    state.merchant = null;
+    state.shop = null;
+    render();
+  };
+}
+
 async function registerMerchant(event) {
   event.preventDefault();
-  const data = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const data = new FormData(form);
   const shopName = String(data.get('shopName') || '').trim();
   const email = String(data.get('email') || '').trim().toLowerCase();
   const password = String(data.get('password') || '');
@@ -368,131 +390,80 @@ async function registerMerchant(event) {
     return;
   }
 
-  try {
-    const response = await apiRequest('/api/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: String(data.get('name') || '').trim(),
-        email,
-        password,
-        shopName,
-        shopType: String(data.get('shopType') || 'Loja')
-      })
-    });
+  const submitButton = form.querySelector('.auth-submit');
+  if (submitButton) submitButton.disabled = true;
 
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || 'Erro ao cadastrar');
-    }
+  const status = await fetchSubscriptionStatus(email);
 
-    setAuthToken(payload.token);
-    state.merchant = payload.merchant || { name: String(data.get('name') || '').trim(), email };
-    state.shop = payload.shop || {
-      name: shopName,
-      type: String(data.get('shopType') || 'Loja'),
-      publicId: `${slug(shopName)}-${Math.random().toString(36).slice(2, 7)}`,
-      description: 'Adicione uma descricao para apresentar seu comercio.',
-      photo: '',
-      isOpen: true,
-      schedule: defaultShopSchedule()
-    };
-    state.categories = [];
-    state.products = [];
-    state.orders = [];
-    state.ratings = [];
-    state.messages = [];
-    state.cart = [];
-    state.orderQuery = '';
-    state.orderFilter = '';
-    state.delivery = { pickup: true, delivery: true, pickupMinutes: 20, deliveryMinutes: 45 };
+  if (submitButton) submitButton.disabled = false;
 
-    sessionStorage.setItem(sessionKey, 'active');
-    renderSaved();
-    notify('Conta criada. Agora personalize sua loja.');
+  if (isSubscriptionExpired(status)) {
+    subscriptionExpiredView();
     return;
-  } catch (error) {
-    // fallback local quando o backend ainda nao estiver ativo
-    state.merchant = {
-      name: String(data.get('name') || '').trim(),
-      email,
-      password
-    };
-
-    state.shop = {
-      name: shopName,
-      type: String(data.get('shopType') || 'Loja'),
-      publicId: `${slug(shopName)}-${Math.random().toString(36).slice(2, 7)}`,
-      description: 'Adicione uma descricao para apresentar seu comercio.',
-      photo: '',
-      isOpen: true,
-      schedule: defaultShopSchedule()
-    };
-
-    state.categories = [];
-    state.products = [];
-    state.orders = [];
-    state.ratings = [];
-    state.messages = [];
-    state.cart = [];
-    state.orderQuery = '';
-    state.orderFilter = '';
-    state.delivery = { pickup: true, delivery: true, pickupMinutes: 20, deliveryMinutes: 45 };
-
-    sessionStorage.setItem(sessionKey, 'active');
-    renderSaved();
-    notify(error.message || 'Conta criada no modo local.');
   }
+
+  state.merchant = {
+    name: String(data.get('name') || '').trim(),
+    email,
+    password
+  };
+
+  state.shop = {
+    name: shopName,
+    type: String(data.get('shopType') || 'Loja'),
+    publicId: `${slug(shopName)}-${Math.random().toString(36).slice(2, 7)}`,
+    description: 'Adicione uma descricao para apresentar seu comercio.',
+    photo: '',
+    isOpen: true,
+    schedule: defaultShopSchedule()
+  };
+
+  state.categories = [];
+  state.products = [];
+  state.orders = [];
+  state.ratings = [];
+  state.messages = [];
+  state.cart = [];
+  state.orderQuery = '';
+  state.orderFilter = '';
+  state.delivery = { pickup: true, delivery: true, pickupMinutes: 20, deliveryMinutes: 45 };
+
+  sessionStorage.setItem(sessionKey, 'active');
+  renderSaved();
+  notify('Conta criada. Agora personalize sua loja.');
 }
 
 async function loginMerchant(event) {
   event.preventDefault();
-  const data = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const data = new FormData(form);
   const email = String(data.get('email') || '').trim().toLowerCase();
   const password = String(data.get('password') || '');
 
-  try {
-    const response = await apiRequest('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || 'E-mail ou senha invalidos.');
-    }
-
-    setAuthToken(payload.token);
-    state.merchant = payload.merchant || state.merchant;
-    state.shop = payload.shop || state.shop;
-    sessionStorage.setItem(sessionKey, 'active');
-    render();
+  if (!state.merchant || email !== state.merchant.email || password !== state.merchant.password) {
+    notify('E-mail ou senha invalidos.');
     return;
-  } catch (error) {
-    if (!state.merchant || email !== state.merchant.email || password !== state.merchant.password) {
-      notify(error.message || 'E-mail ou senha invalidos.');
-      return;
-    }
-
-    sessionStorage.setItem(sessionKey, 'active');
-    render();
   }
+
+  const submitButton = form.querySelector('.auth-submit');
+  if (submitButton) submitButton.disabled = true;
+
+  const status = await fetchSubscriptionStatus(email);
+
+  if (submitButton) submitButton.disabled = false;
+
+  if (isSubscriptionExpired(status)) {
+    subscriptionExpiredView();
+    return;
+  }
+
+  sessionStorage.setItem(sessionKey, 'active');
+  render();
 }
 
 function nav(view, icon, text, count = '') {
   const badge = Number(count || 0);
-  const icons = {
-    home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 9.5V20h14V9.5"></path><path d="M9 20v-6h6v6"></path></svg>',
-    orders: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5h10a2 2 0 0 1 2 2v11.5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2Z"></path><path d="M8 8h8"></path><path d="M8 12h8"></path><path d="M8 16h5"></path></svg>',
-    menu: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M4 12h16"></path><path d="M4 17h16"></path></svg>',
-    categories: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5h8"></path><path d="M6 8.5h12"></path><path d="M4 12.5h16"></path><path d="M8 16.5h8"></path><path d="M11 20.5h2"></path></svg>',
-    chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18.5V7.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H10l-4 3Z"></path><path d="M9 10h6"></path><path d="M9 13h4"></path></svg>',
-    settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.56V20a2 2 0 1 1-4 0v-.08A1.7 1.7 0 0 0 9.7 18.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.7 14.6 1.7 1.7 0 0 0 3.14 13.6H3.1a2 2 0 1 1 0-4h.08A1.7 1.7 0 0 0 4.7 8.4a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.4 4.7 1.7 1.7 0 0 0 9.4 3.14V3.1a2 2 0 1 1 4 0v.08A1.7 1.7 0 0 0 14.3 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.3 8.4a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z"></path></svg>',
-    printers: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4.5h10V8"></path><path d="M7 16.5h10a2 2 0 0 0 2-2V9.5a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2Z"></path><path d="M8 15h8"></path><path d="M8 18.5h8v2.5H8z"></path></svg>'
-  };
-  const svg = icons[icon] || icons.home;
-  return `<button class="${state.view === view ? 'active' : ''}" data-view="${view}"><span class="nav-icon ${icon}">${svg}</span>${text}${badge > 0 ? `<b class="nav-badge">${badge}</b>` : ''}</button>`;
+  return `<button class="${state.view === view ? 'active' : ''}" data-view="${view}"><span class="nav-icon ${icon}"></span>${text}${badge > 0 ? `<b class="nav-badge">${badge}</b>` : ''}</button>`;
 }
 
 function unreadMessagesCount(type = 'merchant') {
@@ -509,10 +480,7 @@ function merchantPanel() {
   app.innerHTML = `
     <div class="shell">
       <aside class="sidebar">
-        <div style="display:flex; align-items:center; gap:10px;">
-          ${brand()}
-          <button class="mobile-menu-toggle" aria-label="Abrir menu" type="button"><span></span></button>
-        </div>
+        ${brand()}
         <div class="shop-mini">
           <div class="shop-avatar">${state.shop.photo ? `<img src="${state.shop.photo}" alt="">` : esc(state.shop.name[0])}</div>
           <div>
@@ -877,48 +845,44 @@ function printersView() {
       <button class="primary-button" data-action="new-printer">Adicionar impressora</button>
     </section>
 
-    <section class="settings-grid accordion-grid">
-      <details class="glass-accordion panel shop-editor" data-accordion="printers-devices" ${isAccordionOpen('printers-devices') ? 'open' : ''}>
-        <summary>Dispositivos cadastrados</summary>
-        <div class="accordion-body editor-body">
-          <div class="editor-cover"><span>Print</span></div>
-          <div class="editor-body">
-            ${state.printers.length ? state.printers.map((printer) => `
-              <div class="printer-row">
-                <div>
-                  <strong>${esc(printer.name)}</strong>
-                  <small>${esc(printer.type)} · ${esc(printer.status || 'Disponivel')}</small>
-                </div>
-                <button class="secondary-button" data-action="connect-printer" data-printer-id="${printer.id}">${printer.status === 'Conectada' ? 'Testar' : 'Conectar'}</button>
+    <section class="settings-grid">
+      <article class="panel shop-editor">
+        <div class="editor-cover"><span>Print</span></div>
+        <div class="editor-body">
+          <p class="eyebrow">DISPOSITIVOS CADASTRADOS</p>
+          ${state.printers.length ? state.printers.map((printer) => `
+            <div class="printer-row">
+              <div>
+                <strong>${esc(printer.name)}</strong>
+                <small>${esc(printer.type)} · ${esc(printer.status || 'Disponivel')}</small>
               </div>
-            `).join('') : '<p class="muted">Nenhuma impressora cadastrada.</p>'}
-          </div>
+              <button class="secondary-button" data-action="connect-printer" data-printer-id="${printer.id}">${printer.status === 'Conectada' ? 'Testar' : 'Conectar'}</button>
+            </div>
+          `).join('') : '<p class="muted">Nenhuma impressora cadastrada.</p>'}
         </div>
-      </details>
+      </article>
 
-      <details class="glass-accordion panel operation-settings" data-accordion="printers-config" ${isAccordionOpen('printers-config') ? 'open' : ''}>
-        <summary>Configuração da comanda</summary>
-        <div class="accordion-body">
-          <label>Tipo de conexão<select data-printer-field="mode">
-            <option value="bluetooth" ${state.printerConfig.mode === 'bluetooth' ? 'selected' : ''}>Bluetooth</option>
-            <option value="cabo" ${state.printerConfig.mode === 'cabo' ? 'selected' : ''}>Cabo / USB</option>
-            <option value="rede" ${state.printerConfig.mode === 'rede' ? 'selected' : ''}>Rede / IP</option>
-            <option value="pdf" ${state.printerConfig.mode === 'pdf' ? 'selected' : ''}>PDF / impressão simples</option>
-          </select></label>
-          <label>Nome da impressora<input data-printer-field="deviceName" value="${esc(state.printerConfig.deviceName || '')}" placeholder="Ex.: Epson TM-T20"></label>
-          <label>Quantas vias saem<input type="number" min="1" max="10" data-printer-field="copies" value="${state.printerConfig.copies || 1}"></label>
-          <label class="choice-row"><input type="checkbox" data-printer-field="autoPrint" ${state.printerConfig.autoPrint ? 'checked' : ''}><span><strong>Imprimir automaticamente ao aceitar</strong><small>Sem precisar apertar o botão de impressão manual</small></span></label>
-          <label class="choice-row"><input type="checkbox" data-printer-field="includeCustomer" ${state.printerConfig.includeCustomer ? 'checked' : ''}><span><strong>Incluir nome do cliente</strong></span></label>
-          <label class="choice-row"><input type="checkbox" data-printer-field="includePhone" ${state.printerConfig.includePhone ? 'checked' : ''}><span><strong>Incluir telefone</strong></span></label>
-          <label class="choice-row"><input type="checkbox" data-printer-field="includeAddress" ${state.printerConfig.includeAddress ? 'checked' : ''}><span><strong>Incluir dados de entrega</strong></span></label>
-          <label class="choice-row"><input type="checkbox" data-printer-field="includeItems" ${state.printerConfig.includeItems ? 'checked' : ''}><span><strong>Incluir itens do pedido</strong></span></label>
-          <label class="choice-row"><input type="checkbox" data-printer-field="includeNotes" ${state.printerConfig.includeNotes ? 'checked' : ''}><span><strong>Incluir observações</strong></span></label>
-          <label class="choice-row"><input type="checkbox" data-printer-field="includePayment" ${state.printerConfig.includePayment ? 'checked' : ''}><span><strong>Incluir forma de pagamento</strong></span></label>
-          <label class="choice-row"><input type="checkbox" data-printer-field="includeFooter" ${state.printerConfig.includeFooter ? 'checked' : ''}><span><strong>Mostrar mensagem final</strong></span></label>
-          <label>Mensagem final<textarea data-printer-field="footerText" rows="2">${esc(state.printerConfig.footerText || '')}</textarea></label>
-          <button class="primary-button" data-action="save-printer-config">Salvar impressora</button>
-        </div>
-      </details>
+      <article class="panel operation-settings">
+        <p class="eyebrow">CONFIGURACAO DA COMANDA</p>
+        <label>Tipo de conexão<select data-printer-field="mode">
+          <option value="bluetooth" ${state.printerConfig.mode === 'bluetooth' ? 'selected' : ''}>Bluetooth</option>
+          <option value="cabo" ${state.printerConfig.mode === 'cabo' ? 'selected' : ''}>Cabo / USB</option>
+          <option value="rede" ${state.printerConfig.mode === 'rede' ? 'selected' : ''}>Rede / IP</option>
+          <option value="pdf" ${state.printerConfig.mode === 'pdf' ? 'selected' : ''}>PDF / impressão simples</option>
+        </select></label>
+        <label>Nome da impressora<input data-printer-field="deviceName" value="${esc(state.printerConfig.deviceName || '')}" placeholder="Ex.: Epson TM-T20"></label>
+        <label>Quantas vias saem<input type="number" min="1" max="10" data-printer-field="copies" value="${state.printerConfig.copies || 1}"></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="autoPrint" ${state.printerConfig.autoPrint ? 'checked' : ''}><span><strong>Imprimir automaticamente ao aceitar</strong><small>Sem precisar apertar o botão de impressão manual</small></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeCustomer" ${state.printerConfig.includeCustomer ? 'checked' : ''}><span><strong>Incluir nome do cliente</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includePhone" ${state.printerConfig.includePhone ? 'checked' : ''}><span><strong>Incluir telefone</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeAddress" ${state.printerConfig.includeAddress ? 'checked' : ''}><span><strong>Incluir dados de entrega</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeItems" ${state.printerConfig.includeItems ? 'checked' : ''}><span><strong>Incluir itens do pedido</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeNotes" ${state.printerConfig.includeNotes ? 'checked' : ''}><span><strong>Incluir observações</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includePayment" ${state.printerConfig.includePayment ? 'checked' : ''}><span><strong>Incluir forma de pagamento</strong></span></label>
+        <label class="choice-row"><input type="checkbox" data-printer-field="includeFooter" ${state.printerConfig.includeFooter ? 'checked' : ''}><span><strong>Mostrar mensagem final</strong></span></label>
+        <label>Mensagem final<textarea data-printer-field="footerText" rows="2">${esc(state.printerConfig.footerText || '')}</textarea></label>
+        <button class="primary-button" data-action="save-printer-config">Salvar impressora</button>
+      </article>
     </section>
 
   `;
@@ -940,19 +904,6 @@ function settingsView() {
     `;
   }).join('');
 
-  const paymentConfig = state.paymentConfig || {
-    cash: true,
-    pix: true,
-    credit: true,
-    debit: true,
-    cardTypes: 'Visa, Mastercard, Elo',
-    cardFee: 0,
-    maxInstallments: 3,
-    needsChange: true,
-    changeFor: 'Até R$ 50,00',
-    customerMessage: 'Pagamento disponível em dinheiro, cartão ou pix.'
-  };
-
   return `
     <section class="page-intro">
       <div>
@@ -962,63 +913,39 @@ function settingsView() {
       </div>
     </section>
 
-    <section class="settings-grid accordion-grid">
-      <details class="glass-accordion panel shop-editor" data-accordion="shop-data" ${isAccordionOpen('shop-data') ? 'open' : ''}>
-        <summary>Dados da loja</summary>
-        <div class="accordion-body editor-body">
-          <div class="editor-cover"><span>PedeIA</span></div>
-          <div class="editor-body">
-            <label>Foto da loja<input type="file" accept="image/*" data-shop-photo></label>
-            <label>Nome da loja<input data-setting="name" value="${esc(state.shop.name)}"></label>
-            <label>Descricao<textarea data-setting="description">${esc(state.shop.description)}</textarea></label>
-            <button class="primary-button" data-action="save-shop">Salvar loja</button>
-          </div>
+    <section class="settings-grid">
+      <article class="panel shop-editor">
+        <div class="editor-cover"><span>PedeIA</span></div>
+        <div class="editor-body">
+          <label>Foto da loja<input type="file" accept="image/*" data-shop-photo></label>
+          <label>Nome da loja<input data-setting="name" value="${esc(state.shop.name)}"></label>
+          <label>Descricao<textarea data-setting="description">${esc(state.shop.description)}</textarea></label>
+          <button class="primary-button" data-action="save-shop">Salvar loja</button>
         </div>
-      </details>
+      </article>
 
-      <details class="glass-accordion panel operation-settings" data-accordion="shop-receipt" ${isAccordionOpen('shop-receipt') ? 'open' : ''}>
-        <summary>Formas de recebimento</summary>
-        <div class="accordion-body">
-          <label class="choice-row"><input type="checkbox" data-delivery="delivery" ${state.delivery.delivery ? 'checked' : ''}><span><strong>Delivery</strong><small>Cliente recebe no endereco informado</small></span></label>
-          <label class="choice-row"><input type="checkbox" data-delivery="pickup" ${state.delivery.pickup ? 'checked' : ''}><span><strong>Retirada no local</strong><small>Cliente busca o pedido na loja</small></span></label>
-          <label>Tempo estimado para delivery<input type="number" min="1" data-delivery-min="deliveryMinutes" value="${state.delivery.deliveryMinutes}"> minutos</label>
-          <label>Tempo estimado para retirada<input type="number" min="1" data-delivery-min="pickupMinutes" value="${state.delivery.pickupMinutes}"> minutos</label>
-          <button class="primary-button" data-action="save-delivery">Salvar tempos</button>
+      <article class="panel operation-settings">
+        <p class="eyebrow">FORMAS DE RECEBIMENTO</p>
+        <label class="choice-row"><input type="checkbox" data-delivery="delivery" ${state.delivery.delivery ? 'checked' : ''}><span><strong>Delivery</strong><small>Cliente recebe no endereco informado</small></span></label>
+        <label class="choice-row"><input type="checkbox" data-delivery="pickup" ${state.delivery.pickup ? 'checked' : ''}><span><strong>Retirada no local</strong><small>Cliente busca o pedido na loja</small></span></label>
+        <label>Tempo estimado para delivery<input type="number" min="1" data-delivery-min="deliveryMinutes" value="${state.delivery.deliveryMinutes}"> minutos</label>
+        <label>Tempo estimado para retirada<input type="number" min="1" data-delivery-min="pickupMinutes" value="${state.delivery.pickupMinutes}"> minutos</label>
+        <button class="primary-button" data-action="save-delivery">Salvar tempos</button>
 
-          <div class="settings-link">
-            <strong>${esc(shopLink())}</strong>
-            <button class="primary-button" data-action="copy">Copiar link</button>
-          </div>
+        <div class="settings-link">
+          <strong>${esc(shopLink())}</strong>
+          <button class="primary-button" data-action="copy">Copiar link</button>
         </div>
-      </details>
+      </article>
 
-      <details class="glass-accordion panel payment-settings" data-accordion="shop-payment" ${isAccordionOpen('shop-payment') ? 'open' : ''}>
-        <summary>Pagamentos</summary>
-        <div class="accordion-body">
-          <label class="choice-row"><input type="checkbox" data-payment-toggle="cash" ${paymentConfig.cash ? 'checked' : ''}><span><strong>Dinheiro</strong><small>Receber em especie</small></span></label>
-          <label class="choice-row"><input type="checkbox" data-payment-toggle="pix" ${paymentConfig.pix ? 'checked' : ''}><span><strong>Pix</strong><small>Transferencia ou QR Code</small></span></label>
-          <label class="choice-row"><input type="checkbox" data-payment-toggle="credit" ${paymentConfig.credit ? 'checked' : ''}><span><strong>Cartao de credito</strong><small>Pagamento com cartão</small></span></label>
-          <label class="choice-row"><input type="checkbox" data-payment-toggle="debit" ${paymentConfig.debit ? 'checked' : ''}><span><strong>Cartao de debito</strong><small>Pagamento com débito</small></span></label>
-          <label>Cartoes aceitos<input data-payment-field="cardTypes" value="${esc(paymentConfig.cardTypes || 'Visa, Mastercard, Elo')}" placeholder="Ex.: Visa, Mastercard, Elo"></label>
-          <label>Acrescimo no cartao (%)<input type="number" min="0" step="0.1" data-payment-field="cardFee" value="${Number(paymentConfig.cardFee || 0)}"></label>
-          <label>Parcelamento maximo<input type="number" min="1" max="12" data-payment-field="maxInstallments" value="${Number(paymentConfig.maxInstallments || 3)}"></label>
-          <label class="choice-row"><input type="checkbox" data-payment-toggle="needsChange" ${paymentConfig.needsChange ? 'checked' : ''}><span><strong>Precisa de troco</strong><small>Cliente pode pagar com mais dinheiro</small></span></label>
-          <label>Troco disponivel para<input data-payment-field="changeFor" value="${esc(paymentConfig.changeFor || 'Até R$ 50,00')}" placeholder="Ex.: até R$ 50,00"></label>
-          <label>Mensagem para o cliente<textarea data-payment-field="customerMessage" rows="2">${esc(paymentConfig.customerMessage || '')}</textarea></label>
-          <button class="primary-button" data-action="save-payment-config">Salvar pagamentos</button>
+      <article class="panel schedule-settings">
+        <p class="eyebrow">HORARIOS DE FUNCIONAMENTO</p>
+        <h3>Configure os dias e o horario da semana</h3>
+        <div class="schedule-list">
+          ${scheduleRows}
         </div>
-      </details>
-
-      <details class="glass-accordion panel schedule-settings" data-accordion="shop-hours" ${isAccordionOpen('shop-hours') ? 'open' : ''}>
-        <summary>Horários de funcionamento</summary>
-        <div class="accordion-body">
-          <h3>Configure os dias e o horario da semana</h3>
-          <div class="schedule-list">
-            ${scheduleRows}
-          </div>
-          <button class="primary-button" data-action="save-shop-hours">Salvar horarios</button>
-        </div>
-      </details>
+        <button class="primary-button" data-action="save-shop-hours">Salvar horarios</button>
+      </article>
     </section>
   `;
 }
@@ -1228,26 +1155,9 @@ function bindMerchant() {
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.onclick = () => {
       state.view = button.dataset.view;
-      const nav = document.querySelector('.side-nav');
-      const toggle = document.querySelector('.mobile-menu-toggle');
-      if (nav && nav.classList.contains('open')) {
-        nav.classList.remove('open');
-      }
-      if (toggle) {
-        toggle.classList.remove('active');
-      }
       renderSaved();
     };
   });
-
-  const mobileToggle = document.querySelector('.mobile-menu-toggle');
-  const sideNav = document.querySelector('.side-nav');
-  if (mobileToggle && sideNav) {
-    mobileToggle.onclick = () => {
-      const isOpen = sideNav.classList.toggle('open');
-      mobileToggle.classList.toggle('active', isOpen);
-    };
-  }
 
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.onclick = handleAction;
@@ -1323,22 +1233,6 @@ function handleAction(event) {
     });
     return renderSaved();
   }
-  if (action === 'save-payment-config') {
-    const paymentConfig = state.paymentConfig || {};
-    document.querySelectorAll('[data-payment-toggle]').forEach((input) => {
-      paymentConfig[input.dataset.paymentToggle] = input.checked;
-    });
-    document.querySelectorAll('[data-payment-field]').forEach((input) => {
-      const value = input.value;
-      if (['cardFee', 'maxInstallments'].includes(input.dataset.paymentField)) {
-        paymentConfig[input.dataset.paymentField] = Number(value || 0);
-      } else {
-        paymentConfig[input.dataset.paymentField] = value;
-      }
-    });
-    state.paymentConfig = paymentConfig;
-    return renderSaved();
-  }
   if (action === 'edit-order-automation') {
     showDialog(`
       <div class="dialog-head">
@@ -1346,23 +1240,13 @@ function handleAction(event) {
         <h2>Configurar pedidos</h2>
         <p>Escolha se aceita automaticamente e ajuste os prazos.</p>
       </div>
-      <form id="automation-form" class="dialog-form automation-form">
+      <form id="automation-form" class="dialog-form">
         <label class="choice-row">
           <input type="checkbox" name="autoAccept" ${state.delivery.autoAccept ? 'checked' : ''}>
           <span><strong>Aceitar pedidos automaticamente</strong><small>Sem precisar confirmar cada ordem nova</small></span>
         </label>
-
-        <div class="time-grid">
-          <label>
-            <span>Tempo estimado para retirada</span>
-            <input type="number" min="1" name="pickupMinutes" value="${Number(state.delivery.pickupMinutes || 20)}">
-          </label>
-          <label>
-            <span>Tempo estimado para delivery</span>
-            <input type="number" min="1" name="deliveryMinutes" value="${Number(state.delivery.deliveryMinutes || 45)}">
-          </label>
-        </div>
-
+        <label>Tempo estimado para retirada<input type="number" min="1" name="pickupMinutes" value="${Number(state.delivery.pickupMinutes || 20)}"></label>
+        <label>Tempo estimado para delivery<input type="number" min="1" name="deliveryMinutes" value="${Number(state.delivery.deliveryMinutes || 45)}"></label>
         <button class="primary-button" type="submit">Salvar ajustes</button>
       </form>
     `);
@@ -1766,36 +1650,10 @@ function cartDialog() {
 
 function checkoutDialog() {
   const cached = JSON.parse(localStorage.getItem(clientKey) || 'null') || {};
-  const paymentConfig = state.paymentConfig || {
-    cash: true,
-    pix: true,
-    credit: true,
-    debit: true,
-    cardTypes: 'Visa, Mastercard, Elo',
-    cardFee: 0,
-    maxInstallments: 3,
-    needsChange: true,
-    changeFor: 'Até R$ 50,00',
-    customerMessage: 'Pagamento disponível em dinheiro, cartão ou pix.'
-  };
-
-  const paymentOptions = [];
-  if (paymentConfig.cash) paymentOptions.push('<option value="Dinheiro">Dinheiro</option>');
-  if (paymentConfig.pix) paymentOptions.push('<option value="Pix">Pix</option>');
-  if (paymentConfig.credit) paymentOptions.push(`<option value="Cartão de crédito">Cartão de crédito (${paymentConfig.cardTypes || 'Visa, Mastercard, Elo'})</option>`);
-  if (paymentConfig.debit) paymentOptions.push(`<option value="Cartão de débito">Cartão de débito (${paymentConfig.cardTypes || 'Visa, Mastercard, Elo'})</option>`);
-  if (!paymentOptions.length) paymentOptions.push('<option value="Pix">Pix</option>');
-
   const modes = [
     state.delivery.delivery ? '<option value="delivery">Entrega</option>' : '',
     state.delivery.pickup ? '<option value="pickup">Retirada no local</option>' : ''
   ].join('');
-
-  const paymentExtra = `
-    ${paymentConfig.customerMessage ? `<small class="payment-message">${esc(paymentConfig.customerMessage)}</small>` : ''}
-    ${paymentConfig.cardFee > 0 ? `<small class="payment-message">Acréscimo no cartão: ${Number(paymentConfig.cardFee)}%</small>` : ''}
-    ${paymentConfig.maxInstallments ? `<small class="payment-message">Parcelamento até ${Number(paymentConfig.maxInstallments)}x sem juros.</small>` : ''}
-  `;
 
   showDialog(`
     <div class="dialog-head">
@@ -1808,33 +1666,12 @@ function checkoutDialog() {
       <label>Telefone<input name="phone" required value="${esc(cached.phone || '')}" placeholder="(00) 00000-0000"></label>
       <label>Forma de recebimento<select name="fulfillment">${modes}</select></label>
       <label class="address-field">Endereco de entrega<input name="address" value="${esc(cached.address || '')}" placeholder="Rua, numero e complemento"></label>
-      <label>Pagamento<select name="payment">${paymentOptions.join('')}</select></label>
-      ${paymentExtra}
-      <div class="payment-extra-row" id="payment-extra-row"></div>
+      <label>Pagamento<select name="payment"><option>Pix</option><option>Cartao na entrega</option><option>Dinheiro</option></select></label>
       <button class="primary-button">Enviar pedido</button>
     </form>
   `);
 
   const form = document.querySelector('#checkout-form');
-  const paymentSelect = form?.querySelector('[name="payment"]');
-  const paymentExtraRow = form?.querySelector('#payment-extra-row');
-
-  const refreshPaymentFields = () => {
-    if (!paymentSelect || !paymentExtraRow) return;
-    const selected = paymentSelect.value;
-    const paymentLabel = selected === 'Dinheiro' && paymentConfig.needsChange ? `
-      <label class="choice-row payment-choice-row"><input type="checkbox" name="needsChange"><span><strong>Precisa de troco</strong><small>Troco para ${esc(paymentConfig.changeFor || 'até R$ 50,00')}</small></span></label>
-    ` : selected === 'Pix' ? `
-      <small class="payment-note">Pagamento por Pix. O vendedor confirma o recebimento ao receber a transferência.</small>
-    ` : selected.includes('Cartão') ? `
-      <small class="payment-note">Cartões aceitos: ${esc(paymentConfig.cardTypes || 'Visa, Mastercard, Elo')}. ${paymentConfig.cardFee > 0 ? `Acréscimo de ${Number(paymentConfig.cardFee)}%.` : 'Sem acréscimo.'}</small>
-    ` : '';
-    paymentExtraRow.innerHTML = paymentLabel;
-  };
-
-  paymentSelect?.addEventListener('change', refreshPaymentFields);
-  refreshPaymentFields();
-
   form.onsubmit = (event) => {
     event.preventDefault();
     const data = new FormData(form);
@@ -1852,9 +1689,6 @@ function checkoutDialog() {
       notify('Informe seu nome e telefone para continuar.');
       return;
     }
-
-    const payment = String(data.get('payment') || 'Pix');
-    const paymentNote = data.get('needsChange') ? 'Troco solicitado' : '';
 
     const total = state.cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
     const minutes = fulfillment === 'delivery' ? Number(state.delivery.deliveryMinutes || 45) : Number(state.delivery.pickupMinutes || 20);
@@ -1874,7 +1708,7 @@ function checkoutDialog() {
       customer,
       phone,
       address,
-      payment: paymentNote ? `${payment} · ${paymentNote}` : payment,
+      payment: String(data.get('payment') || 'Pix'),
       fulfillment,
       status: state.delivery.autoAccept ? 'Em preparo' : 'Aguardando',
       total,
@@ -1948,24 +1782,6 @@ document.addEventListener('change', (event) => {
     render();
   }
 
-  if (event.target.matches('[data-payment-toggle]')) {
-    const field = event.target.dataset.paymentToggle;
-    state.paymentConfig = state.paymentConfig || {};
-    state.paymentConfig[field] = event.target.checked;
-    save();
-  }
-
-  if (event.target.matches('[data-payment-field]')) {
-    const field = event.target.dataset.paymentField;
-    state.paymentConfig = state.paymentConfig || {};
-    if (['cardFee', 'maxInstallments'].includes(field)) {
-      state.paymentConfig[field] = Number(event.target.value || 0);
-    } else {
-      state.paymentConfig[field] = event.target.value;
-    }
-    save();
-  }
-
   if (event.target.matches('[data-printer-field]')) {
     const field = event.target.dataset.printerField;
     if (event.target.type === 'checkbox') {
@@ -1980,23 +1796,6 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('click', (event) => {
-  const summary = event.target.closest('summary');
-  if (summary && summary.parentElement?.matches('.glass-accordion')) {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const details = summary.parentElement;
-    const key = details.dataset.accordion;
-    const shouldOpen = !details.open;
-    details.open = shouldOpen;
-
-    if (key) {
-      setAccordionState(key, shouldOpen);
-      save();
-    }
-    return;
-  }
-
   const viewButton = event.target.closest('[data-customer-view]');
   if (viewButton) {
     state.customerView = viewButton.dataset.customerView;
