@@ -19,12 +19,28 @@
 </head>
 <body>
   <div id="app"></div>
-  <div id="toast" class="toast" role="status"></div>
- <script src="https://unpkg.com/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
-<script src="/js/supabase.js"></script>
-<script src="/app.js"></script>
-  <script>
-    window.addEventListener('DOMContentLoaded', bootstrap);
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm";
+
+    const SUPABASE_URL = "https://irlarzynvelqvihoxtpj.supabase.co";
+    const SUPABASE_ANON_KEY = "sb_publishable_Zm5dduva-m9IenkcqW509Q_t7tBm6Zj";
+
+    // Inicializa o cliente antes de carregar o código principal.
+    window.pedeiaSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const appScript = document.createElement("script");
+    appScript.src = "/app.js";
+    appScript.onload = () => {
+      if (typeof window.bootstrap === "function") {
+        window.bootstrap();
+      } else if (typeof bootstrap === "function") {
+        bootstrap();
+      } else {
+        console.error("Inicialização do PedeIA: função bootstrap não encontrada.");
+      }
+    };
+    appScript.onerror = () => console.error("Não foi possível carregar /app.js");
+    document.body.appendChild(appScript);
   </script>
 </body>
 </html>
