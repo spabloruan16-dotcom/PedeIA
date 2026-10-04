@@ -19,12 +19,30 @@
 </head>
 <body>
   <div id="app"></div>
-   <script src="https://unpkg.com/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
-<script src="/js/supabase.js"></script>
-<script src="/app.js"></script>
-  <script src="app.js"></script>
-  <script>
-    window.addEventListener('DOMContentLoaded', bootstrap);
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm";
+
+    const supabaseUrl = "https://irlarzynvelqvihoxtpj.supabase.co";
+    const supabasePublishableKey = "sb_publishable_Zm5dduva-m9IenkcqW509Q_t7tBm6Zj";
+
+    // Create one client and expose the name expected by the existing app.js.
+    window.pedeiaSupabase = createClient(supabaseUrl, supabasePublishableKey);
+
+    const appScript = document.createElement("script");
+    appScript.src = "/app.js";
+    appScript.onload = () => {
+      if (typeof window.bootstrap === "function") {
+        window.bootstrap().catch((error) => {
+          console.error("Falha ao iniciar o PedeIA:", error);
+        });
+      } else {
+        console.error("Falha ao iniciar o PedeIA: bootstrap() não encontrado.");
+      }
+    };
+    appScript.onerror = () => {
+      console.error("Falha ao carregar /app.js");
+    };
+    document.body.appendChild(appScript);
   </script>
 </body>
 </html>
