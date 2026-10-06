@@ -906,9 +906,23 @@ function navIcon(name) {
   return `<span class="nav-icon ${name}" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false">${paths[name] || ''}</svg></span>`;
 }
 
+function isActiveOrder(order) {
+  const status = String(order?.status || '').trim();
+  return !['Entregue', 'Finalizado', 'Cancelado', 'Cancelada'].includes(status);
+}
+
+function activeOrders() {
+  return state.orders.filter(isActiveOrder);
+}
+
 function unreadMessagesCount(type = 'merchant') {
   if (type === 'merchant') {
-    return state.messages.filter((msg) => msg.scope === 'order' && msg.from !== 'merchant').length;
+    const activeIds = new Set(activeOrders().map((order) => String(order.id)));
+    return state.messages.filter((msg) =>
+      msg.scope === 'order' &&
+      msg.from !== 'merchant' &&
+      activeIds.has(String(msg.orderId))
+    ).length;
   }
   return state.messages.filter((msg) => msg.scope === 'store' && msg.from === 'merchant').length;
 }
@@ -926,7 +940,10 @@ function merchantPanel() {
           <button class="mobile-menu-toggle" type="button" aria-label="Abrir menu" aria-expanded="false" aria-controls="merchant-navigation"><span></span></button>
         </div>
         <div class="shop-mini">
-          <div class="shop-avatar">${state.shop.photo ? `<img src="${state.shop.photo}" alt="">` : esc(state.shop.name[0])}</div>
+          <div class="shop-avatar" aria-label="Foto da loja">
+            <span class="shop-avatar-fallback">${esc(String(state.shop.name || 'L').trim().slice(0, 1).toUpperCase())}</span>
+            ${state.shop.photo ? `<img src="${esc(state.shop.photo)}" alt="${esc(state.shop.name || 'Loja')}" loading="eager" decoding="async">` : ''}
+          </div>
           <div>
             <strong>${esc(state.shop.name)}</strong>
             <small>${state.shop.isOpen ? 'Aberta agora' : 'Fechada'}</small>
@@ -943,7 +960,7 @@ function merchantPanel() {
         </div>
 
         <nav class="side-nav" id="merchant-navigation">
-          ${nav('orders', 'orders', 'Pedidos', state.orders.length)}
+          ${nav('orders', 'orders', 'Pedidos', activeOrders().length)}
           ${nav('history', 'history', 'Histórico', archivedOrders().length)}
           ${nav('couriers', 'delivery', 'Entregadores')}
           ${nav('dashboard', 'home', 'Visao geral')}
@@ -2586,10 +2603,20 @@ function checkoutDialog() {
 
 async function customerChat() {
   const profile = JSON.parse(localStorage.getItem(clientKey) || 'null') || {};
-  const trackingToken = profile.lastTrackingToken;
-  if (!trackingToken || !profile.lastOrderId) {
+  const urlToken = new URLSearchParams(location.search).get('token');
+  const trackingToken = urlToken || profile.lastTrackingToken;
+  if (!trackingToken) {
     notify('Faça um pedido para iniciar uma conversa com a loja.');
     return;
+  }
+
+  // Mantém o último token válido no dispositivo para que o cliente não perca
+  // a conversa ao recarregar a vitrine.
+  if (urlToken && urlToken !== profile.lastTrackingToken) {
+    localStorage.setItem(clientKey, JSON.stringify({
+      ...profile,
+      lastTrackingToken: urlToken
+    }));
   }
   let storeMessages = [];
   try {

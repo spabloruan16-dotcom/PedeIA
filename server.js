@@ -647,13 +647,23 @@ http.createServer((request, response) => {
       const token = String(request.method === "GET" ? url.searchParams.get("token") || "" : body.token || "");
       const publicId = String(request.method === "GET" ? url.searchParams.get("loja") || "" : body.loja || "");
       if (token.length < 30) return respondJson(response, 401, { error: "Link de acompanhamento invalido" });
-      if (!publicId) return respondJson(response, 400, { error: "Loja invalida" });
+
+      // O token de acompanhamento já identifica de forma exclusiva o pedido.
+      // O parâmetro ?loja é tratado apenas como uma validação adicional, evitando
+      // que uma vitrine recarregada/perdida impeça o cliente de conversar.
       const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
       const order = await subscriptionPool.query(
-        "SELECT p.id FROM public.pedidos p JOIN public.lojas l ON l.id=p.loja_id WHERE p.public_token_hash=$1 AND l.public_id=$2 LIMIT 1",
-        [tokenHash, publicId]
+        `SELECT p.id,l.public_id
+           FROM public.pedidos p
+           JOIN public.lojas l ON l.id=p.loja_id
+          WHERE p.public_token_hash=$1
+          LIMIT 1`,
+        [tokenHash]
       );
       if (!order.rowCount) return respondJson(response, 404, { error: "Pedido nao encontrado" });
+      if (publicId && order.rows[0].public_id !== publicId) {
+        return respondJson(response, 403, { error: "O pedido nao pertence a esta loja" });
+      }
       if (request.method === "GET") {
         const messages = await subscriptionPool.query(
           "SELECT id,pedido_id,remetente_tipo,conteudo,created_at FROM public.mensagens_pedidos WHERE pedido_id=$1 ORDER BY created_at ASC LIMIT 500",
