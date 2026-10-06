@@ -73,12 +73,14 @@ let subscriptionCheckLoading = new URLSearchParams(location.search).has('loja');
 let subscriptionCheckError = false;
 let lastSubscriptionCheck = 0;
 let lastMerchantSync = 0;
+let merchantRefreshInFlight = false;
 let merchantCouriers = [];
 let newlyCreatedCourierLink = null;
 let couriersLoaded = false;
 let couriersLoading = false;
 let courierHistoryRows = [];
 let courierHistoryId = null;
+let customerChatRefreshTimer = null;
 
 function fingerprint(value) {
   try {
@@ -211,7 +213,7 @@ async function loadMerchantState() {
       shop: saved.shop ? {
         ...previousShop,
         ...saved.shop,
-        schedule: previousShop?.schedule || defaultShopSchedule()
+        schedule: saved.shop.schedule || previousShop?.schedule || defaultShopSchedule()
       } : null,
       delivery: { ...state.delivery, ...(saved.delivery || {}) }
     };
@@ -502,6 +504,50 @@ function bindSupportPreviews(){document.querySelectorAll('[data-support-preview]
 function supportMessagesHtml(){return supportMessagesList.map(m=>{const url=m.signedUrl||'';const mime=String(m.anexo_tipo||'').toLowerCase();const filename=String(m.anexo_nome||'Anexo');const image=mime.startsWith('image/')||/\.(jpe?g|png|webp|gif|avif)$/i.test(filename);const pdf=mime==='application/pdf'||/\.pdf$/i.test(filename);const attachment=url?(image?`<button type="button" class="support-image-link" data-support-preview="${esc(url)}" data-support-alt="${esc(filename)}" aria-label="Ampliar imagem: ${esc(filename)}"><img class="support-image-preview" src="${esc(url)}" alt="${esc(filename)}" loading="lazy"><span>Ampliar imagem</span></button>`:pdf?`<a class="support-pdf-link" href="${esc(url)}" target="_blank" rel="noopener"><span aria-hidden="true">📄</span><span><strong>${esc(filename)}</strong><small>Abrir PDF em nova aba</small></span><span aria-hidden="true">↗</span></a>`:`<a href="${esc(url)}" target="_blank" rel="noopener">📎 ${esc(filename)}</a>`):'';return `<article class="support-message ${m.remetente_tipo==='admin'?'support-mine':''}"><small>${m.remetente_tipo==='admin'?'Administrador':'Comerciante'} · ${new Date(m.created_at).toLocaleString('pt-BR')}</small>${m.conteudo?`<p>${esc(m.conteudo)}</p>`:''}${attachment}</article>`;}).join('')||'<p class="admin-empty">Nenhuma mensagem ainda.</p>'; }
 async function sendSupportMessage(admin){const form=document.querySelector('#support-reply-form');if(!form||!supportThread)return;const fd=new FormData(form);const conteudo=String(fd.get('conteudo')||'').trim();const file=form.querySelector('input[type=file]')?.files?.[0];try{let attachment=null;if(file){const owner=admin?adminTickets.find(t=>t.id===supportThread)?.comerciante_id:authenticatedUser.id;attachment=await supportUpload(file,owner);}await supportRequest(`${admin?'/api/admin/support':'/api/support'}/${encodeURIComponent(supportThread)}/messages`,'POST',{conteudo,anexo_url:attachment?.path,anexo_nome:attachment?.name,anexo_tipo:attachment?.type});await openSupportThread(supportThread,admin);notify('Mensagem enviada.');}catch(e){notify(e.message||'Não foi possível enviar.');}}
 async function merchantApiRequest(path,method='GET',body){const {data,error}=await window.pedeiaSupabase.auth.getSession();const token=data?.session?.access_token;if(error||!token)throw new Error('Sua sessão expirou. Entre novamente.');const response=await fetch(path,{method,headers:{Authorization:`Bearer ${token}`,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});const result=await response.json();if(!response.ok)throw new Error(result.error||'Falha na operação.');return result;}
+async function refreshMerchantOrders() {
+  const result = await merchantApiRequest('/api/merchant/orders');
+  const current = new Map(state.orders.map((order) => [String(order.id), order]));
+  const nextOrders = (result.pedidos || []).map((order) => ({
+    ...(current.get(String(order.id)) || {}),
+    id: order.id,
+    customer: order.customer || 'Cliente',
+    phone: order.phone || '',
+    address: order.address || '',
+    payment: order.payment || 'Pix',
+    fulfillment: order.fulfillment,
+    status: order.status,
+    total: Number(order.total || 0),
+    deliveryFee: Number(order.deliveryFee || 0),
+    readyAt: order.readyAt ? new Date(order.readyAt).getTime() : Date.now(),
+    createdAt: new Date(order.createdAt).getTime(),
+    updatedAt: new Date(order.updatedAt).getTime(),
+    notes: order.notes || '',
+    items: order.items || []
+  }));
+  if (fingerprint(state.orders) === fingerprint(nextOrders)) return;
+  state.orders = nextOrders;
+  localStorage.setItem(stateKey, JSON.stringify(state));
+  if (!document.activeElement?.matches('input, textarea, select')) render();
+}
+
+async function loadMerchantOrderMessages() {
+  const result = await merchantApiRequest('/api/merchant/order-messages');
+  const currentMessages = state.messages.filter((message) => message.scope === 'order');
+  state.messages = [
+    ...state.messages.filter((message) => message.scope !== 'order'),
+    ...(result.mensagens || []).map((message) => ({
+      id: message.id,
+      orderId: message.pedido_id,
+      from: message.remetente_tipo === 'comerciante' ? 'merchant' : 'customer',
+      text: message.conteudo,
+      time: new Date(message.created_at).toLocaleString('pt-BR'),
+      scope: 'order'
+    }))
+  ];
+  localStorage.setItem(stateKey, JSON.stringify(state));
+  return fingerprint(currentMessages) !== fingerprint(state.messages.filter((message) => message.scope === 'order'));
+}
+
 async function courierRequest(path,method='GET',body){return merchantApiRequest(path,method,body);}
 async function loadCouriers(){const r=await courierRequest('/api/merchant/couriers');merchantCouriers=r.entregadores||[];couriersLoaded=true;}
 function couriersView(){return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA DA LOJA</p><h1>Central de entregadores</h1><p class="intro-copy">Cadastre motoboys, compartilhe o acesso individual e atribua pedidos para entrega.</p></div><button class="secondary-button" data-courier-refresh>Atualizar</button></section><section class="panel courier-panel"><div class="panel-heading"><div><h2>Cadastrar motoboy</h2><p>O link de acesso é exibido uma única vez ao criar ou renovar.</p></div></div><form id="courier-create-form" class="courier-form"><label>Nome completo<input name="nome" required maxlength="120" placeholder="Nome do entregador"></label><label>Telefone<input name="telefone" maxlength="40" placeholder="(00) 00000-0000"></label><label>Veículo<input name="veiculo" maxlength="80" placeholder="Moto, placa opcional"></label><button class="primary-button" type="submit">Cadastrar e gerar link</button></form>${newlyCreatedCourierLink?`<div class="courier-link-notice"><strong>Link individual criado</strong><input readonly value="${esc(newlyCreatedCourierLink)}" id="courier-generated-link"><button type="button" class="secondary-button" data-courier-copy>Copiar link</button><small>Guarde este link e envie apenas ao entregador. Se perdê-lo, desative este cadastro e crie outro.</small></div>`:''}</section><section class="courier-list">${merchantCouriers.map(c=>`<article class="panel courier-card"><div class="courier-card-top"><div><strong>${esc(c.nome)}</strong><small>${esc(c.telefone||'Sem telefone')} ${c.veiculo?'· '+esc(c.veiculo):''}</small></div><span class="courier-state ${c.ativo?'active':'inactive'}">${c.ativo?'Ativo':'Desativado'}</span></div><p>${Number(c.pedidos_ativos||0)} pedido(s) ativo(s)</p><div class="courier-today-summary"><strong>${Number(c.entregas_hoje||0)} entregas hoje</strong><span>Taxas do dia: ${money(Number(c.ganhos_hoje||0))}</span></div><div class="courier-actions"><button class="secondary-button" data-courier-history="${c.id}">Histórico de entregas</button><button class="secondary-button" data-courier-assign="${c.id}" ${!c.ativo?'disabled':''}>Atribuir pedido</button><button class="secondary-button" data-courier-toggle="${c.id}" data-active="${c.ativo?'true':'false'}">${c.ativo?'Desativar':'Ativar'}</button><button class="secondary-button" data-courier-delete="${c.id}">Excluir</button></div></article>`).join('')||'<div class="panel"><p>Nenhum entregador cadastrado ainda.</p></div>'}</section>${courierHistoryId?`<section class="panel courier-history-panel"><div class="panel-heading"><div><h2>Histórico de ${esc(merchantCouriers.find(c=>c.id===courierHistoryId)?.nome||'entregador')}</h2><p>Entregas concluídas e taxas registradas.</p></div><button class="secondary-button" data-courier-history-close>Fechar</button></div><div class="courier-history-list">${courierHistoryRows.map(h=>`<article class="courier-history-row"><div><strong>Pedido #${esc(String(h.pedido_id).slice(0,8))}</strong><small>${new Date(h.concluida_em).toLocaleString('pt-BR')} · ${esc(h.endereco||'Endereço não informado')}</small></div><strong>${money(Number(h.taxa_recebida||0))}</strong></article>`).join('')||'<p class="admin-empty">Nenhuma entrega concluída registrada.</p>'}</div></section>`:''}<section class="panel courier-note"><strong>Sobre as rotas</strong><p>O motoboy acessa seus pedidos por um link protegido. A rota abre no Google Maps com os endereços atribuídos. A otimização automática por proximidade e o rastreamento GPS contínuo dependem da próxima etapa de geolocalização e mapas.</p></section>`;}
@@ -563,22 +609,29 @@ async function bootstrap() {
     authenticatedUser = session?.user?.email_confirmed_at ? session.user : null;
     isAdmin = false;
     if (event === 'SIGNED_OUT') {
+      clearInterval(window.__pedeiaLiveRefresh);
+      window.__pedeiaLiveRefresh = null;
       stateKey = baseStateKey;
       render();
     } else if (authenticatedUser) {
-      checkAdmin().then(async (admin) => { if (admin) { try { await loadAdminMerchants(); } catch (e) { notify(e.message); } } render(); });
+      checkAdmin().then(async (admin) => {
+        if (admin) { try { await loadAdminMerchants(); } catch (e) { notify(e.message); } }
+        else { selectUserState(authenticatedUser); await loadMerchantState(); }
+        render();
+        if (!admin) startLiveRefresh();
+      });
     }
   });
 
   render();
-  startLiveRefresh();
+  if (publicShop() !== null || merchantLogged()) startLiveRefresh();
 }
 
 function startLiveRefresh() {
   if (window.__pedeiaLiveRefresh) return;
+  if (publicShop() === null && !merchantLogged()) return;
 
   window.__pedeiaLiveRefresh = setInterval(async () => {
-    if (document.activeElement?.matches('input, textarea, select')) return;
     if (publicShop() !== null) {
       const profile=JSON.parse(localStorage.getItem(clientKey)||'null')||{};
       if(profile.lastTrackingToken && state.customerView==='tracking'){
@@ -589,15 +642,27 @@ function startLiveRefresh() {
       }
       return;
     }
-    await syncServerState();
-    if (authenticatedUser) {
-      await refreshShopSubscription();
-      if (isAdmin && Date.now() - lastAdminSupportPoll > 15000 && !document.activeElement?.matches('input, textarea, select')) {
-        lastAdminSupportPoll = Date.now();
-        try { await loadAdminTickets(); const stamp = adminTickets.map(t => `${t.id}:${t.updated_at}`).join('|'); if (lastAdminSupportStamp !== null && stamp !== lastAdminSupportStamp) { notify('Há uma nova mensagem ou atualização na central de atendimento.'); if (document.querySelector('.admin-shell')) adminPanel(); } lastAdminSupportStamp = stamp; } catch (e) { console.warn('Atualização do atendimento falhou:', e.message); }
-      }
+    if (document.activeElement?.matches('input, textarea, select')) {
+      closeShopAtScheduledTime();
+      return;
     }
-  }, 1500);
+    if (!merchantLogged()) return;
+    if (document.activeElement?.matches('input, textarea, select')) {
+      closeShopAtScheduledTime();
+      return;
+    }
+    if (merchantRefreshInFlight) return;
+    merchantRefreshInFlight = true;
+    try {
+      await refreshMerchantOrders();
+      if (state.view === 'chat' && await loadMerchantOrderMessages()) render();
+    } catch (error) {
+      console.error('Falha ao atualizar pedidos e conversas:', error.message);
+    } finally {
+      merchantRefreshInFlight = false;
+    }
+    closeShopAtScheduledTime();
+  }, 5000);
 }
 
 async function refreshShopSubscription() {
@@ -830,6 +895,7 @@ function nav(view, icon, text, count = '') {
 function navIcon(name) {
   const paths = {
     orders: '<path d="M7 3.5h8l3 3V20H6V3.5h1Z"/><path d="M14.5 3.5V7H18M9 11h6M9 14h6M9 17h3"/>',
+    history: '<path d="M3 12a9 9 0 1 0 2.7-6.4L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
     home: '<path d="m3.5 10 8.5-7 8.5 7"/><path d="M5.5 9v11h13V9M9.5 20v-6h5v6"/>',
     menu: '<path d="M4 5.5h16M4 10.5h16M4 15.5h10M4 19.5h7"/>',
     categories: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="6" height="7" rx="1.5"/><rect x="4" y="14" width="7" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>',
@@ -878,6 +944,7 @@ function merchantPanel() {
 
         <nav class="side-nav" id="merchant-navigation">
           ${nav('orders', 'orders', 'Pedidos', state.orders.length)}
+          ${nav('history', 'history', 'Histórico', archivedOrders().length)}
           ${nav('couriers', 'delivery', 'Entregadores')}
           ${nav('dashboard', 'home', 'Visao geral')}
           ${nav('menu', 'menu', 'Cardapio')}
@@ -907,7 +974,7 @@ function merchantPanel() {
           <button class="outline-button" data-action="open-shop">Ver minha loja</button>
         </header>
 
-        ${page === 'couriers' ? couriersView() : page === 'support' ? merchantSupportView() : page === 'orders' ? orderBoard() : page === 'dashboard' ? overview(revenue) : page === 'menu' ? menuView() : page === 'categories' ? categoryView() : page === 'chat' ? chatView() : page === 'printers' ? printersView() : settingsView()}
+        ${page === 'couriers' ? couriersView() : page === 'support' ? merchantSupportView() : page === 'orders' ? orderBoard() : page === 'history' ? orderHistoryView() : page === 'dashboard' ? overview(revenue) : page === 'menu' ? menuView() : page === 'categories' ? categoryView() : page === 'chat' ? chatView() : page === 'printers' ? printersView() : settingsView()}
       </main>
       <button class="quick-chat-fab" data-action="quick-chat" aria-label="Abrir conversas">💬</button>
     </div>
@@ -1035,7 +1102,103 @@ function filteredOrders() {
   });
 }
 
+function orderClosingTime(order) {
+  if (!['Entregue', 'Finalizado'].includes(order.status)) return null;
+  const completedAt = Number(order.updatedAt || order.createdAt);
+  if (!completedAt) return null;
+  const schedule = state.shop?.schedule || defaultShopSchedule();
+  const dayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+  const completedDate = new Date(completedAt);
+
+  for (let offset = -1; offset <= 7; offset += 1) {
+    const date = new Date(completedDate);
+    date.setDate(date.getDate() + offset);
+    const config = schedule[dayNames[date.getDay()]];
+    if (!config?.enabled || !/^\d{2}:\d{2}$/.test(config.open || '') || !/^\d{2}:\d{2}$/.test(config.close || '')) continue;
+    const [openHours, openMinutes] = config.open.split(':').map(Number);
+    const [hours, minutes] = config.close.split(':').map(Number);
+    const closesNextDay = hours * 60 + minutes < openHours * 60 + openMinutes;
+    if (closesNextDay) date.setDate(date.getDate() + 1);
+    date.setHours(hours, minutes, 0, 0);
+    if (date.getTime() >= completedAt) return date.getTime();
+  }
+  return null;
+}
+
+function isWithinShopSchedule(schedule, now = new Date()) {
+  const weekDayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+  if (!schedule || !weekDayNames.some((day) => Object.prototype.hasOwnProperty.call(schedule, day))) return true;
+  const minutesNow = now.getHours() * 60 + now.getMinutes();
+  const today = schedule[weekDayNames[now.getDay()]];
+  if (today?.enabled && /^\d{2}:\d{2}$/.test(today.open || '') && /^\d{2}:\d{2}$/.test(today.close || '')) {
+    const [openHour, openMinute] = today.open.split(':').map(Number);
+    const [closeHour, closeMinute] = today.close.split(':').map(Number);
+    const opensAt = openHour * 60 + openMinute;
+    const closesAt = closeHour * 60 + closeMinute;
+    if (opensAt < closesAt && minutesNow >= opensAt && minutesNow < closesAt) return true;
+    if (opensAt > closesAt && minutesNow >= opensAt) return true;
+  }
+
+  const previousDay = schedule[weekDayNames[(now.getDay() + 6) % 7]];
+  if (previousDay?.enabled && /^\d{2}:\d{2}$/.test(previousDay.open || '') && /^\d{2}:\d{2}$/.test(previousDay.close || '')) {
+    const [openHour, openMinute] = previousDay.open.split(':').map(Number);
+    const [closeHour, closeMinute] = previousDay.close.split(':').map(Number);
+    if (openHour * 60 + openMinute > closeHour * 60 + closeMinute && minutesNow < closeHour * 60 + closeMinute) return true;
+  }
+  return false;
+}
+
+function isArchivedOrder(order, now = Date.now()) {
+  const closingTime = orderClosingTime(order);
+  return closingTime !== null && closingTime <= now;
+}
+
+function archivedOrders() {
+  return state.orders.filter((order) => isArchivedOrder(order));
+}
+
+function closeShopAtScheduledTime(now = new Date()) {
+  if (!state.shop?.isOpen) return;
+  if (isWithinShopSchedule(state.shop.schedule || defaultShopSchedule(), now)) return;
+
+  state.shop.isOpen = false;
+  save();
+  render();
+  notify('A loja foi fechada conforme o horário de funcionamento.');
+}
+
+function orderHistoryView() {
+  const orders = filteredOrders().filter(isArchivedOrder);
+  return `
+    <section class="page-intro board-intro">
+      <div>
+        <p class="eyebrow">PEDIDOS CONCLUÍDOS</p>
+        <h1>Histórico de pedidos</h1>
+        <p class="intro-copy">Os pedidos entregues ficam disponíveis aqui após o horário de fechamento da loja.</p>
+      </div>
+    </section>
+    <div class="board-tools">
+      <div class="search-field">
+        <span>Buscar</span>
+        <input data-order-search value="${esc(state.orderQuery || '')}" placeholder="Cliente ou número do pedido">
+      </div>
+      <div class="filter-pills">
+        <button class="${!state.orderFilter ? 'selected' : ''}" data-filter="">Todos</button>
+        <button class="${state.orderFilter === 'delivery' ? 'selected' : ''}" data-filter="delivery">Delivery</button>
+        <button class="${state.orderFilter === 'pickup' ? 'selected' : ''}" data-filter="pickup">Retirada</button>
+      </div>
+    </div>
+    <section class="order-history-list">
+      ${orders.map((order) => orderCard(order, true)).join('') || empty('Histórico vazio', 'Os pedidos entregues serão arquivados após o fechamento da loja.')}
+    </section>
+  `;
+}
+
 function orderBoardResults(visible) {
+  const finalOrders = visible.filter((order) =>
+    ['Saiu para entrega', 'Em rota'].includes(order.status) ||
+    (['Entregue', 'Finalizado'].includes(order.status) && !isArchivedOrder(order))
+  );
   return `
     <section class="order-board">
       <div class="board-column incoming-column">
@@ -1053,17 +1216,17 @@ function orderBoardResults(visible) {
       </div>
 
       <div class="board-column delivery-column">
-        <header><strong>Finalizados</strong><b>${visible.filter((order) => ['Saiu para entrega', 'Entregue'].includes(order.status)).length}</b></header>
+        <header><strong>Finalizados</strong><b>${finalOrders.length}</b></header>
         <div class="board-list">
-          ${visible.filter((order) => ['Saiu para entrega', 'Entregue'].includes(order.status)).map(orderCard).join('') || empty('Sem entregas no momento', 'Aqui ficam envios realizados.')}
+          ${finalOrders.map((order) => orderCard(order)).join('') || empty('Sem entregas no momento', 'Aqui ficam envios realizados.')}
         </div>
       </div>
     </section>
   `;
 }
 
-function orderCard(order) {
-  const late = order.status !== 'Entregue' && Number(order.readyAt || 0) < Date.now();
+function orderCard(order, history = false) {
+  const late = !['Entregue', 'Finalizado'].includes(order.status) && Number(order.readyAt || 0) < Date.now();
   return `
     <article class="order-card ${late ? 'late' : ''}" data-order-id="${order.id}">
       <div class="order-card-top">
@@ -1080,7 +1243,7 @@ function orderCard(order) {
       ${order.notes ? `<div class="order-observation">Observacao: ${esc(order.notes)}</div>` : ''}
       <div class="card-actions">
         <button class="secondary-button" data-action="open-order" data-id="${order.id}">Ver detalhes</button>
-        ${order.status === 'Aguardando' ? `<button class="primary-button" data-action="accept-order" data-id="${order.id}">Aceitar agora</button>` : order.status === 'Em preparo' ? `<button class="primary-button" data-action="advance-order" data-id="${order.id}">Avancar pedido</button>` : order.status === 'Pronto' && order.fulfillment === 'delivery' ? `<button class="primary-button" data-action="advance-order" data-id="${order.id}">Saiu para entrega</button>` : order.status !== 'Entregue' ? `<button class="primary-button" data-action="advance-order" data-id="${order.id}">Finalizar pedido</button>` : '<span class="delivered-label">Entregue</span>'}
+        ${history ? '<span class="delivered-label">Entregue</span>' : order.status === 'Aguardando' ? `<button class="primary-button" data-action="accept-order" data-id="${order.id}">Aceitar agora</button>` : order.status === 'Em preparo' ? `<button class="primary-button" data-action="advance-order" data-id="${order.id}">Avancar pedido</button>` : order.status === 'Pronto' && order.fulfillment === 'delivery' ? `<button class="primary-button" data-action="advance-order" data-id="${order.id}">Saiu para entrega</button>` : !['Entregue', 'Finalizado'].includes(order.status) ? `<button class="primary-button" data-action="advance-order" data-id="${order.id}">Finalizar pedido</button>` : '<span class="delivered-label">Entregue</span>'}
       </div>
     </article>
   `;
@@ -1088,14 +1251,30 @@ function orderCard(order) {
 
 function remaining(order) {
   if (!order) return 'Sem prazo';
-  if (order.status === 'Entregue') return 'Finalizado';
+  if (['Entregue', 'Finalizado'].includes(order.status)) return 'Finalizado';
   const readyAt = Number(order.readyAt || 0);
   const minutes = Math.ceil((readyAt - Date.now()) / 60000);
   return minutes < 0 ? `Atrasado ha ${Math.abs(minutes)} min` : `Faltam ${minutes} min`;
 }
 
-function orderDetails(order) {
-  const messages = state.messages.filter((msg) => msg.orderId === order.id);
+async function orderDetails(order) {
+  if (authenticatedUser) {
+    try {
+      const result = await merchantApiRequest(`/api/merchant/order-messages?pedido_id=${encodeURIComponent(order.id)}`);
+      state.messages = state.messages.filter((message) => String(message.orderId) !== String(order.id) || message.scope !== 'order')
+        .concat((result.mensagens || []).map((message) => ({
+          id: message.id,
+          orderId: message.pedido_id,
+          from: message.remetente_tipo === 'comerciante' ? 'merchant' : 'customer',
+          text: message.conteudo,
+          time: new Date(message.created_at).toLocaleString('pt-BR'),
+          scope: 'order'
+        })));
+    } catch (error) {
+      notify(error.message || 'Não foi possível carregar a conversa deste pedido.');
+    }
+  }
+  const messages = state.messages.filter((msg) => String(msg.orderId) === String(order.id) && msg.scope === 'order');
   showDialog(`
     <div class="dialog-head">
       <span class="category-icon">PED</span>
@@ -1117,21 +1296,24 @@ function orderDetails(order) {
     </div>
   `);
 
-  document.querySelector('[data-order-chat]')?.addEventListener('submit', (event) => {
+  document.querySelector('[data-order-chat]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const input = event.currentTarget.elements.message;
     const text = String(input.value || '').trim();
     if (!text) return;
-    state.messages.push({
-      orderId: order.id,
-      from: 'merchant',
-      text,
-      time: nowTime(),
-      scope: 'order'
-    });
-    save();
-    closeDialog();
-    orderDetails(order);
+    try {
+      if (authenticatedUser) {
+        await merchantApiRequest('/api/merchant/order-messages', 'POST', { pedido_id: order.id, conteudo: text });
+        await loadMerchantOrderMessages();
+      } else {
+        state.messages.push({ orderId: order.id, from: 'merchant', text, time: nowTime(), scope: 'order' });
+        await save();
+      }
+      closeDialog();
+      orderDetails(state.orders.find((item) => String(item.id) === String(order.id)) || order);
+    } catch (error) {
+      notify(error.message || 'Não foi possível enviar a mensagem.');
+    }
   });
 }
 
@@ -1208,6 +1390,7 @@ function categoryView() {
 }
 
 function chatView() {
+  const orders = state.orders.slice(0, 50);
   return `
     <section class="page-intro">
       <div>
@@ -1217,13 +1400,11 @@ function chatView() {
       </div>
     </section>
 
-    <section class="panel chat-panel">
-      <div class="chat-messages">
-        ${state.messages.filter((msg) => msg.scope === 'order').map((msg) => `<div class="message ${msg.from === 'merchant' ? 'mine' : ''}"><small>Pedido ${esc(msg.orderId || '')}</small>${esc(msg.text)}<small>${esc(msg.time)}</small></div>`).join('') || empty('Nenhuma conversa ainda', 'O botao de conversar aparece em cada pedido.')}
-      </div>
-      <form class="chat-compose">
-        <input name="message" required placeholder="Selecione um pedido para responder">
-      </form>
+    <section class="merchant-conversations">
+      ${orders.map((order) => {
+        const messages = state.messages.filter((message) => message.scope === 'order' && String(message.orderId) === String(order.id));
+        return `<article class="panel merchant-conversation"><div class="panel-heading"><div><h2>Pedido ${esc(order.id)}</h2><p>${esc(order.customer || 'Cliente')} · ${esc(order.status)}</p></div></div><div class="chat-messages compact">${messages.map((message) => `<div class="message ${message.from === 'merchant' ? 'mine' : ''}">${esc(message.text)}<small>${esc(message.time)}</small></div>`).join('') || '<small>Nenhuma mensagem neste pedido.</small>'}</div><form class="chat-compose merchant-order-chat" data-order-chat="${esc(order.id)}"><input name="message" required maxlength="2000" placeholder="Responder ao cliente"><button type="submit">Enviar</button></form></article>`;
+      }).join('') || empty('Nenhum pedido para conversar', 'As conversas aparecem aqui quando um cliente enviar uma mensagem sobre um pedido.')}
     </section>
   `;
 }
@@ -1350,8 +1531,7 @@ function settingsView() {
       <details class="panel shop-editor settings-disclosure" data-disclosure="service-neighborhoods">
         <summary class="disclosure-summary"><span><small>ENTREGA</small><strong>Bairros de atendimento</strong><span>Defina cobertura e taxa por bairro</span></span><span class="disclosure-indicator" aria-hidden="true"></span></summary>
         <div class="disclosure-body editor-body">
-          <p class="muted">As sugestões são referências geográficas. Confirme os bairros que sua loja realmente atende e ajuste a taxa de cada um.</p>
-          <div class="neighborhood-suggest-panel"><button type="button" class="secondary-button" data-action="suggest-neighborhoods"><span aria-hidden="true">⌕</span> Sugerir bairros pela cidade e estado</button></div>
+          <p class="muted">Cadastre manualmente os bairros atendidos e a taxa de entrega de cada um.</p>
           <form id="service-neighborhood-form" class="dialog-form">
             <div class="service-neighborhood-list">${(state.shop.serviceNeighborhoods||[]).map((item)=>{const n=typeof item==='string'?{nome:item,taxa:0}:item;return `<div class="service-neighborhood-row"><label>Bairro<input data-service-name value="${esc(n.nome||n.name||'')}" required maxlength="100"></label><label>Taxa de entrega (R$)<input data-service-fee type="number" min="0" step="0.01" value="${Number(n.taxa??n.fee??0)}" required></label><button type="button" class="secondary-button" data-remove-service-neighborhood aria-label="Remover bairro">Remover</button></div>`;}).join('')}</div>
             <div class="service-neighborhood-row service-neighborhood-add"><label>Adicionar bairro manualmente<input name="newNeighborhood" maxlength="100" placeholder="Nome do bairro"></label><label>Taxa (R$)<input name="newNeighborhoodFee" type="number" min="0" step="0.01" value="0"></label><button type="button" class="secondary-button" data-add-service-neighborhood>Adicionar</button></div>
@@ -1481,6 +1661,29 @@ function customerShop() {
 
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.onclick = handleAction;
+  });
+
+  document.querySelectorAll('.merchant-order-chat').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const input = form.elements.message;
+      const text = String(input.value || '').trim();
+      if (!text) return;
+      const button = form.querySelector('button[type="submit"]');
+      if (button) button.disabled = true;
+      try {
+        await merchantApiRequest('/api/merchant/order-messages', 'POST', {
+          pedido_id: form.dataset.orderChat,
+          conteudo: text
+        });
+        await loadMerchantOrderMessages();
+        render();
+      } catch (error) {
+        notify(error.message || 'Não foi possível enviar a mensagem.');
+      } finally {
+        if (button) button.disabled = false;
+      }
+    });
   });
 
   document.querySelectorAll('[data-customer-view]').forEach((button) => {
@@ -1681,6 +1884,7 @@ function bindMerchant() {
     button.onclick = async () => {
       state.view = button.dataset.view;
       if(state.view==='support'){try{await loadMerchantTickets();supportThread=merchantTickets[0]?.id||null;if(supportThread){const r=await supportRequest(`/api/support/${supportThread}/messages`);supportMessagesList=await Promise.all((r.mensagens||[]).map(async m=>({...m,signedUrl:await signedSupportUrl(m.anexo_url)})));}}catch(e){notify(e.message);}}
+      if(state.view==='chat'){try{await loadMerchantOrderMessages();}catch(e){notify(e.message||'Não foi possível carregar as conversas.');}}
       if(state.view==='couriers'){try{await loadCouriers();}catch(e){notify(e.message);}}
       renderSaved();
     };
@@ -1690,24 +1894,77 @@ function bindMerchant() {
     button.onclick = handleAction;
   });
 
-  document.querySelector('#service-neighborhood-form')?.addEventListener('submit', async (event) => {
+  const serviceNeighborhoodForm = document.querySelector('#service-neighborhood-form');
+  const persistServiceNeighborhoods = async (values) => {
+    state.shop.serviceNeighborhoods = values;
+    state.shop.storefront = { ...(state.shop.storefront || {}), serviceNeighborhoods: values };
+    localStorage.setItem(stateKey, JSON.stringify(state));
+    if (authenticatedUser) {
+      await merchantStateRequest('PUT', state);
+      return;
+    }
+    const response = await fetch('/api/save-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state)
+    });
+    if (!response.ok) throw new Error('Não foi possível salvar os bairros e as taxas.');
+  };
+
+  serviceNeighborhoodForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const rows=[...document.querySelectorAll('.service-neighborhood-row:not(.service-neighborhood-add)')];
-    const values=rows.map(row=>({nome:row.querySelector('[data-service-name]')?.value.trim()||'',taxa:Number(row.querySelector('[data-service-fee]')?.value||0)})).filter(x=>x.nome);
-    if(values.some(x=>!Number.isFinite(x.taxa)||x.taxa<0)){notify('Informe taxas válidas e não negativas.');return;}
-    state.shop.serviceNeighborhoods=values;
-    state.shop.storefront=state.shop.storefront||{};
-    state.shop.storefront.serviceNeighborhoods=values;
-    try{await save();render();document.querySelector('[data-disclosure=\"service-neighborhoods\"]')?.setAttribute('open','');notify('Bairros e taxas salvos.');}catch(err){notify(err.message);}
+    const rows = [...serviceNeighborhoodForm.querySelectorAll('.service-neighborhood-row:not(.service-neighborhood-add)')];
+    const values = rows.map((row) => ({
+      nome: row.querySelector('[data-service-name]')?.value.trim() || '',
+      taxa: Number(row.querySelector('[data-service-fee]')?.value)
+    }));
+    if (values.some((item) => !item.nome || !Number.isFinite(item.taxa) || item.taxa < 0)) {
+      notify('Informe o nome de cada bairro e uma taxa válida.');
+      return;
+    }
+    const names = values.map((item) => normalizeNeighborhoodName(item.nome));
+    if (new Set(names).size !== names.length) {
+      notify('Remova os bairros duplicados antes de salvar.');
+      return;
+    }
+    try {
+      await persistServiceNeighborhoods(values);
+      render();
+      document.querySelector('[data-disclosure="service-neighborhoods"]')?.setAttribute('open', '');
+      notify('Bairros e taxas salvos.');
+    } catch (error) {
+      notify(error.message || 'Não foi possível salvar os bairros e as taxas.');
+    }
   });
-  document.querySelector('[data-add-service-neighborhood]')?.addEventListener('click',()=>{
-    const form=document.querySelector('#service-neighborhood-form'), name=form?.elements.newNeighborhood.value.trim(), fee=Number(form?.elements.newNeighborhoodFee.value||0);
-    if(!name){notify('Digite o nome do bairro.');return;}
-    const exists=[...document.querySelectorAll('[data-service-name]')].some(x=>x.value.trim().toLocaleLowerCase('pt-BR')===name.toLocaleLowerCase('pt-BR'));
-    if(exists){notify('Esse bairro já foi adicionado.');return;}
-    const list=document.querySelector('.service-neighborhood-list');const row=document.createElement('div');row.className='service-neighborhood-row';row.innerHTML=`<label>Bairro<input data-service-name required maxlength="100"></label><label>Taxa de entrega (R$)<input data-service-fee type="number" min="0" step="0.01" required></label><button type="button" class="secondary-button" data-remove-service-neighborhood>Remover</button>`;row.querySelector('[data-service-name]').value=name;row.querySelector('[data-service-fee]').value=String(fee);row.querySelector('[data-remove-service-neighborhood]').addEventListener('click',()=>row.remove());list?.append(row);form.elements.newNeighborhood.value='';
+  document.querySelector('[data-add-service-neighborhood]')?.addEventListener('click', async () => {
+    const name = String(serviceNeighborhoodForm?.elements.newNeighborhood.value || '').trim();
+    const fee = Number(serviceNeighborhoodForm?.elements.newNeighborhoodFee.value);
+    if (!name) { notify('Digite o nome do bairro.'); return; }
+    if (!Number.isFinite(fee) || fee < 0) { notify('Informe uma taxa válida e não negativa.'); return; }
+    const values = (state.shop.serviceNeighborhoods || []).map((item) => typeof item === 'string'
+      ? { nome: item, taxa: 0 }
+      : { nome: String(item.nome || item.name || '').trim(), taxa: Number(item.taxa ?? item.fee ?? 0) });
+    if (values.some((item) => normalizeNeighborhoodName(item.nome) === normalizeNeighborhoodName(name))) {
+      notify('Esse bairro já está cadastrado.');
+      return;
+    }
+    values.push({ nome: name, taxa: fee });
+    const addButton = document.querySelector('[data-add-service-neighborhood]');
+    if (addButton) addButton.disabled = true;
+    try {
+      await persistServiceNeighborhoods(values);
+      render();
+      document.querySelector('[data-disclosure="service-neighborhoods"]')?.setAttribute('open', '');
+      notify('Bairro e taxa adicionados.');
+    } catch (error) {
+      notify(error.message || 'Não foi possível adicionar o bairro.');
+    } finally {
+      if (addButton) addButton.disabled = false;
+    }
   });
-  document.querySelectorAll('[data-remove-service-neighborhood]').forEach(button=>button.addEventListener('click',()=>button.closest('.service-neighborhood-row')?.remove()));
+  document.querySelectorAll('[data-remove-service-neighborhood]').forEach((button) => button.addEventListener('click', () => {
+    button.closest('.service-neighborhood-row')?.remove();
+  }));
 
   document.querySelectorAll('[data-filter]').forEach((button) => {
     button.onclick = () => {
@@ -1720,9 +1977,10 @@ function bindMerchant() {
     state.orderQuery = event.target.value;
     save();
     const board = document.querySelector('.order-board');
-    if (!board) return;
-    board.outerHTML = orderBoardResults(filteredOrders());
-    document.querySelectorAll('.order-board [data-action]').forEach((button) => {
+    if (board) board.outerHTML = orderBoardResults(filteredOrders());
+    const historyList = document.querySelector('.order-history-list');
+    if (historyList) historyList.innerHTML = filteredOrders().filter(isArchivedOrder).map((order) => orderCard(order, true)).join('') || empty('Histórico vazio', 'Os pedidos entregues serão arquivados após o fechamento da loja.');
+    document.querySelectorAll('.order-board [data-action], .order-history-list [data-action]').forEach((button) => {
       button.onclick = handleAction;
     });
   });
@@ -1757,19 +2015,6 @@ function handleAction(event) {
   const button = event.currentTarget;
   const action = button.dataset.action;
 
-  if (action === 'suggest-neighborhoods') {
-    const city=document.querySelector('[data-shop-city]')?.value.trim()||state.shop.addressCity||'';
-    const region=document.querySelector('[data-shop-state]')?.value.trim()||state.shop.addressState||'';
-    if(!city||!region){notify('Informe a cidade e o estado do endereço da loja primeiro.');return;}
-    button.disabled=true;button.textContent='Buscando sugestões...';
-    return merchantApiRequest('/api/geocode-neighborhoods','POST',{cidade:city,estado:region}).then(result=>{
-      const suggestions=result.sugestoes||[];
-      if(!suggestions.length){notify(result.aviso||'Nenhuma sugestão encontrada. Cadastre os bairros manualmente.');return;}
-      const selected=new Set((state.shop.serviceNeighborhoods||[]).map(x=>typeof x==='string'?x:(x.nome||x.name||'')));
-      showDialog(`<div class="dialog-head"><h2>Bairros sugeridos</h2><p>${esc(result.aviso||'Confira os bairros e selecione os que sua loja atende.')}</p></div><form id="neighborhood-suggestion-form" class="dialog-form"><div class="suggested-neighborhood-list">${suggestions.map((item,i)=>`<label class="choice-row"><input type="checkbox" name="neighborhood" value="${esc(item.nome)}" ${selected.has(item.nome)?'checked':''}><span><strong>${esc(item.nome)}</strong><small>${esc(item.tipo||'Bairro')}</small></span></label>`).join('')}</div><label>Adicionar bairro que faltou<input name="manualNeighborhood" placeholder="Digite o nome do bairro"></label><button class="primary-button" type="submit">Adicionar selecionados</button></form>`);
-      document.querySelector('#neighborhood-suggestion-form')?.addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;const values=[...f.querySelectorAll('input[name="neighborhood"]:checked')].map(x=>x.value);const manual=String(new FormData(f).get('manualNeighborhood')||'').trim();if(manual)values.push(manual);const existing=(state.shop.serviceNeighborhoods||[]).map(x=>typeof x==='string'?{nome:x,taxa:0}:x);for(const nome of values){if(!existing.some(x=>String(x.nome||x.name).toLocaleLowerCase('pt-BR')===nome.toLocaleLowerCase('pt-BR')))existing.push({nome,taxa:0});}state.shop.serviceNeighborhoods=existing;state.shop.storefront=state.shop.storefront||{};state.shop.storefront.serviceNeighborhoods=existing;save().then(()=>{closeDialog();render();document.querySelector('[data-disclosure=\"service-neighborhoods\"]')?.setAttribute('open','');notify('Sugestões adicionadas. Defina as taxas e salve.');}).catch(err=>notify(err.message));});
-    }).catch(err=>notify(err.message)).finally(()=>{button.disabled=false;button.textContent='⌕ Sugerir bairros automaticamente';});
-  }
   if (action === 'new-category') return categoryDialog();
   if (action === 'new-product' || action === 'edit-product') return productDialog(button.dataset.id);
   if (action === 'remove-category') {
@@ -1790,13 +2035,7 @@ function handleAction(event) {
   if (action === 'toggle-open') {
     const nextOpen = !state.shop.isOpen;
     if (!nextOpen) {
-      const finishedOrders = state.orders.filter((order) => ['Entregue', 'Finalizado', 'Pronto', 'Saiu para entrega'].includes(order.status));
-      const message = finishedOrders.length ? 'Fechar a loja e apagar os pedidos já finalizados?' : 'Deseja fechar a loja?';
-      const shouldProceed = window.confirm(message);
-      if (!shouldProceed) return;
-      if (finishedOrders.length) {
-        state.orders = state.orders.filter((order) => !['Entregue', 'Finalizado', 'Pronto', 'Saiu para entrega'].includes(order.status));
-      }
+      if (!window.confirm('Deseja fechar a loja? Os pedidos em preparo e em entrega continuarão ativos.')) return;
     }
     state.shop.isOpen = nextOpen;
     return renderSaved();
@@ -1863,6 +2102,7 @@ function handleAction(event) {
       nextSchedule[day] = { enabled, open, close };
     });
     state.shop.schedule = nextSchedule;
+    state.shop.storefront = { ...(state.shop.storefront || {}), schedule: nextSchedule };
     return renderSaved();
   }
   if (action === 'save-printer-config') {
@@ -2196,6 +2436,8 @@ function showDialog(content) {
 }
 
 function closeDialog() {
+  clearInterval(customerChatRefreshTimer);
+  customerChatRefreshTimer = null;
   document.querySelector('.dialog-overlay')?.remove();
 }
 
@@ -2342,16 +2584,31 @@ function checkoutDialog() {
   };
 }
 
-function customerChat() {
-  const storeMessages = state.messages.filter((msg) => msg.scope === 'store' || msg.from === 'merchant');
+async function customerChat() {
+  const profile = JSON.parse(localStorage.getItem(clientKey) || 'null') || {};
+  const trackingToken = profile.lastTrackingToken;
+  if (!trackingToken || !profile.lastOrderId) {
+    notify('Faça um pedido para iniciar uma conversa com a loja.');
+    return;
+  }
+  let storeMessages = [];
+  try {
+    const response = await fetch(`/api/order-chat?token=${encodeURIComponent(trackingToken)}&loja=${encodeURIComponent(publicShop() || '')}`, { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Não foi possível carregar a conversa.');
+    storeMessages = result.mensagens || [];
+  } catch (error) {
+    notify(error.message || 'Não foi possível carregar a conversa.');
+    return;
+  }
   showDialog(`
     <div class="dialog-head">
       <span class="category-icon">Chat</span>
       <h2>Falar com a loja</h2>
       <p>Envie uma duvida e a loja respondera por aqui.</p>
     </div>
-    <div class="chat-messages compact">
-      ${storeMessages.length ? storeMessages.map((msg) => `<div class="message ${msg.from === 'customer' ? 'mine' : ''}">${esc(msg.text)}<small>${esc(msg.time)}</small></div>`).join('') : '<p>Nenhuma mensagem ainda.</p>'}
+    <div class="chat-messages compact customer-chat-messages">
+      ${storeMessages.length ? storeMessages.map((msg) => `<div class="message ${msg.remetente_tipo === 'cliente' ? 'mine' : ''}">${esc(msg.conteudo)}<small>${esc(new Date(msg.created_at).toLocaleString('pt-BR'))}</small></div>`).join('') : '<p>Nenhuma mensagem ainda.</p>'}
     </div>
     <form id="customer-chat" class="chat-compose">
       <input name="message" required placeholder="Escreva sua duvida...">
@@ -2359,22 +2616,45 @@ function customerChat() {
     </form>
   `);
 
-  document.querySelector('#customer-chat').onsubmit = (event) => {
+  document.querySelector('#customer-chat').onsubmit = async (event) => {
     event.preventDefault();
     const input = event.currentTarget.elements.message;
     const text = String(input.value || '').trim();
     if (!text) return;
 
-    state.messages.push({
-      from: 'customer',
-      text,
-      time: nowTime(),
-      scope: 'store'
-    });
-    save();
-    closeDialog();
-    notify('Mensagem enviada para a loja');
+    const submit = event.submitter;
+    if (submit) submit.disabled = true;
+    try {
+      const response = await fetch('/api/order-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: trackingToken, loja: publicShop(), conteudo: text })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Não foi possível enviar a mensagem.');
+      notify('Mensagem enviada para a loja.');
+      closeDialog();
+      await customerChat();
+    } catch (error) {
+      notify(error.message || 'Não foi possível enviar a mensagem.');
+      if (submit) submit.disabled = false;
+    }
   };
+  clearInterval(customerChatRefreshTimer);
+  customerChatRefreshTimer = setInterval(async () => {
+    if (!document.querySelector('.customer-chat-messages') || document.activeElement?.closest('#customer-chat')) return;
+    try {
+      const response = await fetch(`/api/order-chat?token=${encodeURIComponent(trackingToken)}&loja=${encodeURIComponent(publicShop() || '')}`, { cache: 'no-store' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Falha ao atualizar a conversa.');
+      const messages = result.mensagens || [];
+      document.querySelector('.customer-chat-messages').innerHTML = messages.length
+        ? messages.map((message) => `<div class="message ${message.remetente_tipo === 'cliente' ? 'mine' : ''}">${esc(message.conteudo)}<small>${esc(new Date(message.created_at).toLocaleString('pt-BR'))}</small></div>`).join('')
+        : '<p>Nenhuma mensagem ainda.</p>';
+    } catch (error) {
+      console.error('Falha ao atualizar a conversa:', error.message);
+    }
+  }, 5000);
 }
 
 function nowTime() {

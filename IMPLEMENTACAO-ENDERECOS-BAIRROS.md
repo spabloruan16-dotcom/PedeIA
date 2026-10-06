@@ -4,11 +4,11 @@ Esta versão adiciona ao checkout campos separados de rua, número, complemento,
 
 ## Banco
 
-Execute `melhorias-endereco-bairros-historico.sql` no Supabase antes de publicar esta versão. O script é aditivo e não usa o `schema.sql` antigo do projeto. Faça backup antes de qualquer migração em produção.
+Execute `melhorias-endereco-bairros-historico.sql` no Supabase para os campos de endereço. Para habilitar as conversas entre clientes e a loja, execute também `mensagens-pedidos.sql`. Os scripts são aditivos e não usam o `schema.sql` antigo do projeto. Faça backup antes de qualquer migração em produção.
 
-## Atenção sobre funções em etapas
+## Bairros de atendimento e taxas
 
-As tabelas `bairros_atendimento` e `historico_entregas` são a base de dados para as próximas rotas e telas. Esta etapa ainda não implementa a busca automática de bairros por município, seleção de bairros no checkout, taxas variáveis, nem as telas de histórico e totais diários. A lista automática exige uma fonte geográfica e tratamento de cobertura incompleta; deverá permitir sempre a inclusão manual de bairros. Não considerar essas funções ativas até que as interfaces e endpoints correspondentes sejam integrados e testados.
+Os bairros são cadastrados manualmente na configuração da loja, com taxa individual. O cadastro é salvo em `personalizacao_vitrine.serviceNeighborhoods` como objetos `{ nome, taxa }`, mantendo leitura compatível com registros antigos que contenham apenas nomes. No checkout, o cliente escolhe um dos bairros cadastrados e a taxa correspondente é calculada no servidor.
 
 ## Rastreamento para retirada
 
@@ -17,5 +17,8 @@ O endpoint `/api/order-track` também retorna o endereço formatado da loja a pa
 Esta função depende da migração de endereço da loja ter sido executada e dos dados de endereço da loja estarem preenchidos. Não foi possível testar contra o Supabase ou Render remoto neste ambiente.
 
 
-### Bairros de atendimento e taxas
-A tela possui uma seção separada para manter bairros atendidos e a taxa individual de entrega. As sugestões da geocodificação são filtradas para `neighbourhood` e `borough`; resultados classificados apenas como `locality` (cidade/localidade) não são apresentados como bairros. Como a cobertura geográfica pode ser incompleta, o comerciante confirma as sugestões e pode adicionar bairros manualmente. Os valores ficam em `personalizacao_vitrine.serviceNeighborhoods` como objetos `{ nome, taxa }`, mantendo leitura compatível com registros antigos que contenham apenas nomes.
+O comerciante adiciona, edita e remove manualmente os bairros e suas taxas; o botão **Adicionar** salva o bairro imediatamente. A loja não consulta sugestões automáticas de bairros.
+
+## Conversas dos pedidos
+
+As mensagens do cliente e do comerciante são associadas ao pedido e compartilhadas entre os dispositivos. Antes de usar o chat, execute `mensagens-pedidos.sql` no Supabase para criar a tabela de mensagens. O link/token de acompanhamento do pedido autoriza o cliente a consultar e enviar mensagens; o painel do comerciante usa a sessão autenticada.

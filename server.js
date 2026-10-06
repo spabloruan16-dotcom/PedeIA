@@ -113,6 +113,7 @@ function readRequestJson(request) {
 
 function shopDto(row) {
   if (!row) return null;
+  const schedule = row.personalizacao_vitrine?.schedule || null;
   return {
     id: row.id,
     merchantId: row.merchant_id,
@@ -124,7 +125,8 @@ function shopDto(row) {
     cover: row.banner_url || row.capa_url || "",
     themeColor: row.cor_tema || "#b9362b",
     storefront: row.personalizacao_vitrine || {},
-    isOpen: row.esta_aberta,
+    schedule,
+    isOpen: row.esta_aberta && isWithinShopSchedule(schedule),
     delivery: row.aceita_entrega,
     pickup: row.aceita_retirada,
     deliveryMinutes: row.tempo_entrega,
@@ -132,6 +134,29 @@ function shopDto(row) {
     serviceNeighborhoods: Array.isArray((row.personalizacao_vitrine||{}).serviceNeighborhoods)?row.personalizacao_vitrine.serviceNeighborhoods:[],
     addressStreet: row.endereco_rua || "", addressNumber: row.endereco_numero || "", addressComplement: row.endereco_complemento || "", addressNeighborhood: row.endereco_bairro || "", addressCity: row.endereco_cidade || "", addressState: row.endereco_estado || "", addressZip: row.endereco_cep || ""
   };
+}
+
+function isWithinShopSchedule(schedule, now = new Date()) {
+  if (!schedule || !Object.keys(schedule).some((day) => ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'].includes(day))) return true;
+  const dayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+  const minutesNow = now.getHours() * 60 + now.getMinutes();
+  const today = schedule[dayNames[now.getDay()]];
+  if (today?.enabled && /^\d{2}:\d{2}$/.test(today.open || '') && /^\d{2}:\d{2}$/.test(today.close || '')) {
+    const [openHour, openMinute] = today.open.split(':').map(Number);
+    const [closeHour, closeMinute] = today.close.split(':').map(Number);
+    const opensAt = openHour * 60 + openMinute;
+    const closesAt = closeHour * 60 + closeMinute;
+    if (opensAt < closesAt && minutesNow >= opensAt && minutesNow < closesAt) return true;
+    if (opensAt > closesAt && minutesNow >= opensAt) return true;
+  }
+
+  const previousDay = schedule[dayNames[(now.getDay() + 6) % 7]];
+  if (previousDay?.enabled && /^\d{2}:\d{2}$/.test(previousDay.open || '') && /^\d{2}:\d{2}$/.test(previousDay.close || '')) {
+    const [openHour, openMinute] = previousDay.open.split(':').map(Number);
+    const [closeHour, closeMinute] = previousDay.close.split(':').map(Number);
+    if (openHour * 60 + openMinute > closeHour * 60 + closeMinute && minutesNow < closeHour * 60 + closeMinute) return true;
+  }
+  return false;
 }
 
 async function loadShopState(shop, merchant, includePrivate) {
@@ -571,7 +596,7 @@ http.createServer((request, response) => {
       if(!shopRes.rowCount)return respondJson(response,404,{error:"Loja nao encontrada"});
       const shop=shopRes.rows[0], expires=shop.fim_assinatura?new Date(shop.fim_assinatura).getTime():null;
       if(shop.status_assinatura!=="ativa"||(expires!==null&&expires<Date.now()))return respondJson(response,403,{error:"Esta loja nao esta recebendo pedidos no momento"});
-      if(shop.esta_aberta===false)return respondJson(response,409,{error:"A loja esta fechada"});
+      if(shop.esta_aberta===false||!isWithinShopSchedule(shop.personalizacao_vitrine?.schedule))return respondJson(response,409,{error:"A loja esta fechada ou fora do horario de funcionamento"});
       if((fulfillment==="delivery"&&!shop.aceita_entrega)||(fulfillment==="pickup"&&!shop.aceita_retirada))return respondJson(response,409,{error:"Esta modalidade nao esta disponivel"});
       const serviceNeighborhoods=Array.isArray((shop.personalizacao_vitrine||{}).serviceNeighborhoods)?shop.personalizacao_vitrine.serviceNeighborhoods:[];
       let deliveryFee=0;
@@ -615,6 +640,100 @@ http.createServer((request, response) => {
     (async()=>{if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});const token=String(url.searchParams.get("token")||"");if(token.length<30)return respondJson(response,401,{error:"Codigo de acompanhamento invalido"});const hash=crypto.createHash("sha256").update(token).digest("hex");const r=await subscriptionPool.query(`SELECT p.id,p.status,p.tipo_entrega,p.previsao_entrega,p.created_at,p.updated_at,l.nome AS loja_nome, NULLIF(concat_ws(', ', NULLIF(l.endereco_rua,''), NULLIF(l.endereco_numero,''), NULLIF(l.endereco_complemento,''), NULLIF(l.endereco_bairro,''), NULLIF(l.endereco_cidade,''), NULLIF(l.endereco_estado,''), NULLIF(l.endereco_cep,'')), '') AS loja_endereco, e.ultima_latitude,e.ultima_longitude,e.localizacao_atualizada_em FROM public.pedidos p JOIN public.lojas l ON l.id=p.loja_id LEFT JOIN public.entregadores e ON e.id=p.entregador_id WHERE p.public_token_hash=$1 LIMIT 1`,[hash]);if(!r.rowCount)return respondJson(response,404,{error:"Pedido nao encontrado"});const o=r.rows[0];return respondJson(response,200,{pedido:{id:o.id,status:o.status,tipo_entrega:o.tipo_entrega,previsao_entrega:o.previsao_entrega,created_at:o.created_at,updated_at:o.updated_at,loja_nome:o.loja_nome,loja_endereco:o.loja_endereco,localizacao:o.ultima_latitude!==null&&o.ultima_longitude!==null?{latitude:Number(o.ultima_latitude),longitude:Number(o.ultima_longitude),at:o.localizacao_atualizada_em}:null}});})().catch(e=>{console.error("Falha rastreio pedido:",e.message);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel consultar o pedido"});});return;
   }
 
+  if (pathname === "/api/order-chat" && ["GET", "POST"].includes(request.method)) {
+    (async () => {
+      if (!subscriptionPool) return respondJson(response, 503, { error: "Banco de dados indisponivel" });
+      const body = request.method === "POST" ? await readRequestJson(request) : {};
+      const token = String(request.method === "GET" ? url.searchParams.get("token") || "" : body.token || "");
+      const publicId = String(request.method === "GET" ? url.searchParams.get("loja") || "" : body.loja || "");
+      if (token.length < 30) return respondJson(response, 401, { error: "Link de acompanhamento invalido" });
+      if (!publicId) return respondJson(response, 400, { error: "Loja invalida" });
+      const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+      const order = await subscriptionPool.query(
+        "SELECT p.id FROM public.pedidos p JOIN public.lojas l ON l.id=p.loja_id WHERE p.public_token_hash=$1 AND l.public_id=$2 LIMIT 1",
+        [tokenHash, publicId]
+      );
+      if (!order.rowCount) return respondJson(response, 404, { error: "Pedido nao encontrado" });
+      if (request.method === "GET") {
+        const messages = await subscriptionPool.query(
+          "SELECT id,pedido_id,remetente_tipo,conteudo,created_at FROM public.mensagens_pedidos WHERE pedido_id=$1 ORDER BY created_at ASC LIMIT 500",
+          [order.rows[0].id]
+        );
+        return respondJson(response, 200, { mensagens: messages.rows });
+      }
+      const content = String(body.conteudo || "").trim();
+      if (!content || content.length > 2000) return respondJson(response, 400, { error: "A mensagem deve ter entre 1 e 2000 caracteres" });
+      const inserted = await subscriptionPool.query(
+        "INSERT INTO public.mensagens_pedidos(pedido_id,remetente_tipo,conteudo) VALUES($1,'cliente',$2) RETURNING id,pedido_id,remetente_tipo,conteudo,created_at",
+        [order.rows[0].id, content]
+      );
+      return respondJson(response, 201, { mensagem: inserted.rows[0] });
+    })().catch((error) => {
+      console.error("Falha na conversa do pedido:", error.message);
+      if (!response.headersSent) respondJson(response, 500, { error: "Nao foi possivel carregar ou enviar a mensagem" });
+    });
+    return;
+  }
+
+  if (pathname === "/api/merchant/order-messages" && ["GET", "POST"].includes(request.method)) {
+    (async () => {
+      if (!subscriptionPool) return respondJson(response, 503, { error: "Banco de dados indisponivel" });
+      const user = await authenticatedUser(request);
+      if (!user) return respondJson(response, 401, { error: "Sessao invalida" });
+      const merchant = await subscriptionPool.query(
+        "SELECT status_assinatura,fim_assinatura FROM public.comerciantes WHERE id=$1",
+        [user.id]
+      );
+      if (!merchant.rowCount) return respondJson(response, 403, { error: "Perfil de comerciante nao encontrado" });
+      const subscription = merchant.rows[0];
+      if (subscription.status_assinatura !== "ativa" || (subscription.fim_assinatura && new Date(subscription.fim_assinatura).getTime() < Date.now())) {
+        return respondJson(response, 403, { error: "Assinatura inativa" });
+      }
+      const shop = await subscriptionPool.query("SELECT id FROM public.lojas WHERE merchant_id=$1 ORDER BY created_at LIMIT 1", [user.id]);
+      if (!shop.rowCount) return respondJson(response, 404, { error: "Loja nao encontrada" });
+      if (request.method === "GET") {
+        const orderId = String(url.searchParams.get("pedido_id") || "");
+        const values = [shop.rows[0].id];
+        let orderClause = "";
+        if (orderId) {
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
+            return respondJson(response, 400, { error: "ID de pedido invalido" });
+          }
+          values.push(orderId);
+          orderClause = "AND p.id=$2";
+        }
+        const messages = await subscriptionPool.query(
+          `SELECT m.id,m.pedido_id,m.remetente_tipo,m.conteudo,m.created_at
+           FROM public.mensagens_pedidos m
+           JOIN public.pedidos p ON p.id=m.pedido_id
+           WHERE p.loja_id=$1 ${orderClause}
+           ORDER BY m.created_at ASC LIMIT 1000`,
+          values
+        );
+        return respondJson(response, 200, { mensagens: messages.rows });
+      }
+      const body = await readRequestJson(request);
+      const orderId = String(body.pedido_id || "");
+      const content = String(body.conteudo || "").trim();
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
+        return respondJson(response, 400, { error: "ID de pedido invalido" });
+      }
+      if (!content || content.length > 2000) return respondJson(response, 400, { error: "A mensagem deve ter entre 1 e 2000 caracteres" });
+      const inserted = await subscriptionPool.query(
+        `INSERT INTO public.mensagens_pedidos(pedido_id,remetente_tipo,conteudo)
+         SELECT p.id,'comerciante',$3 FROM public.pedidos p WHERE p.id=$1 AND p.loja_id=$2
+         RETURNING id,pedido_id,remetente_tipo,conteudo,created_at`,
+        [orderId, shop.rows[0].id, content]
+      );
+      if (!inserted.rowCount) return respondJson(response, 404, { error: "Pedido nao encontrado para esta loja" });
+      return respondJson(response, 201, { mensagem: inserted.rows[0] });
+    })().catch((error) => {
+      console.error("Falha nas conversas do comerciante:", error.message);
+      if (!response.headersSent) respondJson(response, 500, { error: "Nao foi possivel carregar ou enviar a mensagem" });
+    });
+    return;
+  }
+
   if (pathname === "/api/merchant/orders" && ["GET","PATCH"].includes(request.method)) {
     (async()=>{
       if(!subscriptionPool)return respondJson(response,503,{error:"Banco de dados indisponivel"});
@@ -622,7 +741,26 @@ http.createServer((request, response) => {
       const mr=await subscriptionPool.query("SELECT status_assinatura,fim_assinatura FROM public.comerciantes WHERE id=$1",[user.id]);if(!mr.rowCount)return respondJson(response,403,{error:"Perfil de comerciante nao encontrado"});
       const sub=mr.rows[0];if(sub.status_assinatura!=="ativa"||(sub.fim_assinatura&&new Date(sub.fim_assinatura).getTime()<Date.now()))return respondJson(response,403,{error:"Assinatura inativa"});
       const lr=await subscriptionPool.query("SELECT id FROM public.lojas WHERE merchant_id=$1 ORDER BY created_at LIMIT 1",[user.id]);if(!lr.rowCount)return respondJson(response,404,{error:"Loja nao encontrada"});const shopId=lr.rows[0].id;
-      if(request.method==="GET"){const r=await subscriptionPool.query("SELECT id,status,endereco,tipo_entrega,created_at FROM public.pedidos WHERE loja_id=$1 ORDER BY created_at DESC LIMIT 300",[shopId]);return respondJson(response,200,{pedidos:r.rows});}
+      if(request.method==="GET"){
+        const r=await subscriptionPool.query(`
+          SELECT p.id,p.status,p.endereco,p.tipo_entrega,p.pagamento,p.observacoes,p.total,p.taxa_entrega,p.previsao_entrega,p.created_at,p.updated_at,
+                 c.nome AS cliente_nome,c.telefone AS cliente_telefone,
+                 COALESCE(json_agg(json_build_object('id',i.produto_id,'name',i.produto_nome,'description',i.produto_descricao,'quantity',i.quantidade,'price',i.preco_unitario,'notes',i.observacao,'selections',i.personalizacoes)) FILTER (WHERE i.id IS NOT NULL),'[]') AS items
+          FROM public.pedidos p
+          JOIN public.clientes c ON c.id=p.cliente_id
+          LEFT JOIN public.itens_do_pedido i ON i.pedido_id=p.id
+          WHERE p.loja_id=$1
+          GROUP BY p.id,c.nome,c.telefone
+          ORDER BY p.created_at DESC LIMIT 300`,[shopId]);
+        const pedidos=r.rows.map(p=>({
+          id:p.id,status:p.status,address:p.endereco||"",fulfillment:p.tipo_entrega,payment:p.pagamento||"Pix",
+          notes:p.observacoes||"",total:Number(p.total||0),deliveryFee:Number(p.taxa_entrega||0),
+          readyAt:p.previsao_entrega,createdAt:p.created_at,updatedAt:p.updated_at,
+          customer:p.cliente_nome,phone:p.cliente_telefone||"",
+          items:(p.items||[]).map(i=>({id:i.id,name:i.name,description:i.description||"",quantity:Number(i.quantity),price:Number(i.price),notes:i.notes||"",selections:i.selections||[]}))
+        }));
+        return respondJson(response,200,{pedidos});
+      }
       const b=await readRequestJson(request),orderId=String(b.pedido_id||""),status=String(b.status||"");const allowed=["Aguardando","Em preparo","Pronto","Saiu para entrega","Em rota","Entregue","Cancelado","Cancelada","Problema na entrega"];
       if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)||!allowed.includes(status))return respondJson(response,400,{error:"Pedido ou status invalido"});
       const client=await subscriptionPool.connect();try{await client.query("BEGIN");const r=await client.query("UPDATE public.pedidos SET status=$3,updated_at=NOW(),confirmado_em=CASE WHEN $4::text='Entregue' THEN NOW() ELSE confirmado_em END WHERE id=$1 AND loja_id=$2 RETURNING id,status,updated_at,entregador_id,taxa_entrega,endereco,tipo_entrega",[orderId,shopId,status,status]);if(!r.rowCount){await client.query("ROLLBACK");return respondJson(response,404,{error:"Pedido nao encontrado"});}const p=r.rows[0];if(status==='Entregue'&&p.tipo_entrega==='delivery'&&p.entregador_id){await client.query(`INSERT INTO public.historico_entregas(loja_id,pedido_id,entregador_id,taxa_recebida,endereco,concluida_em) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(pedido_id) DO NOTHING`,[shopId,p.id,p.entregador_id,Number(p.taxa_entrega||0),p.endereco]);}await client.query("COMMIT");return respondJson(response,200,{pedido:{id:p.id,status:p.status,updated_at:p.updated_at}});}catch(e){await client.query("ROLLBACK");throw e;}finally{client.release();}
@@ -730,21 +868,6 @@ http.createServer((request, response) => {
   }
   if (pathname === "/motoboy" || pathname === "/motoboy/") { pathname="/motoboy.html"; }
   if (pathname === "/acompanhar" || pathname === "/acompanhar/") { pathname="/acompanhar.html"; }
-  if (pathname === "/api/geocode-neighborhoods" && request.method === "POST") {
-    (async()=>{
-      if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});
-      const user=await authenticatedUser(request);if(!user)return respondJson(response,401,{error:"Sessao invalida"});
-      const body=await readRequestJson(request),city=String(body.cidade||"").trim().slice(0,100),state=String(body.estado||"").trim().slice(0,80);
-      if(!city||!state)return respondJson(response,400,{error:"Informe cidade e estado para buscar sugestoes"});
-      const merchant=await subscriptionPool.query("SELECT status_assinatura,fim_assinatura FROM public.comerciantes WHERE id=$1",[user.id]);
-      if(!merchant.rowCount||merchant.rows[0].status_assinatura!=="ativa"||(merchant.rows[0].fim_assinatura&&new Date(merchant.rows[0].fim_assinatura)<new Date()))return respondJson(response,403,{error:"Assinatura inativa"});
-      const key=process.env.ORS_API_KEY;if(!key)return respondJson(response,503,{error:"Configure ORS_API_KEY no servidor Render"});
-      const endpoint=new URL("https://api.openrouteservice.org/geocode/search");endpoint.searchParams.set("text",`${city}, ${state}, Brasil`);endpoint.searchParams.set("boundary.country","BR");endpoint.searchParams.set("layers","neighbourhood,borough");endpoint.searchParams.set("size","30");endpoint.searchParams.set("api_key",key);
-      const upstream=await fetch(endpoint,{signal:AbortSignal.timeout(12000)});if(!upstream.ok)return respondJson(response,502,{error:"O serviço geográfico não retornou sugestões. Você pode cadastrar os bairros manualmente."});
-      const data=await upstream.json(),seen=new Set(),suggestions=[];for(const f of data.features||[]){const props=f.properties||{},name=String(props.name||props.locality||"").trim(),layer=String(props.layer||"");if(!name||!(["neighbourhood","borough"].includes(layer)))continue;const k=name.toLocaleLowerCase("pt-BR");if(!seen.has(k)){seen.add(k);suggestions.push({nome:name,tipo:layer});}}
-      return respondJson(response,200,{sugestoes:suggestions.slice(0,30),aviso:suggestions.length?"Revise as sugestões: a cobertura do mapa pode ser incompleta.":"Nenhum bairro encontrado. Você pode adicionar manualmente."});
-    })().catch(e=>{console.error("Falha sugestoes geograficas:",e.message);if(!response.headersSent)respondJson(response,502,{error:"Não foi possível buscar bairros agora. Cadastre-os manualmente."});});return;
-  }
   if (pathname === "/api/merchant-state") {
     (async () => {
       if (!subscriptionPool) return respondJson(response, 503, { error: "Banco de dados indisponivel" });
