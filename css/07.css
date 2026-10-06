@@ -1136,12 +1136,7 @@ select:focus {
 .storefront-cover-preview{display:block;width:100%;max-height:180px;aspect-ratio:16/5;object-fit:cover;border-radius:12px;border:1px solid var(--line);background:#f1f4f0}.storefront-cover-empty{display:grid;place-items:center;color:var(--muted);font-size:12px;background:repeating-linear-gradient(135deg,#f6f8f5,#f6f8f5 12px,#eef2ed 12px,#eef2ed 24px);}
 @media(max-width:600px){.store-hero{min-height:155px;padding:18px 14px}.store-promo{margin:12px 14px;padding:15px}.featured-products{padding:10px 14px}}
 
-/* Endereço da loja e sugestões geográficas */
-.neighborhood-suggest-panel{margin:14px 0;padding:14px;border:1px solid var(--line,#dce5df);border-radius:14px;background:var(--surface-soft,#f7faf8)}
-.neighborhood-suggest-panel p{margin:0 0 10px;color:var(--muted,#66736c);font-size:13px;line-height:1.5}
-.suggested-neighborhood-list{display:grid;gap:8px;max-height:45vh;overflow:auto;padding:4px 0}
-.suggested-neighborhood-list .choice-row{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--line,#dce5df);border-radius:10px;background:var(--surface,#fff)}
-.selected-neighborhoods{margin:12px 0}.selected-neighborhoods>div{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}.selected-neighborhoods span{display:inline-flex;padding:6px 10px;border-radius:999px;background:var(--surface-soft,#f2f5f3);border:1px solid var(--line,#dce5df);font-size:12px}
+/* Endereço da loja e bairros de entrega cadastrados manualmente */
 
 /* Gerenciamento de bairros e taxas por estabelecimento */
 .service-neighborhood-list{display:grid;gap:10px;margin:12px 0}.service-neighborhood-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,.55fr) auto;align-items:end;gap:10px;padding:12px;border:1px solid var(--line,#dce5df);border-radius:12px;background:var(--surface,#fff)}.service-neighborhood-row label{display:grid;gap:5px;font-size:12px;font-weight:650;color:var(--ink-soft)}.service-neighborhood-row input{width:100%;min-width:0}.service-neighborhood-add{background:var(--surface-soft,#f7faf8);margin:12px 0}@media(max-width:600px){.service-neighborhood-row{grid-template-columns:minmax(0,1fr) minmax(110px,.65fr);gap:8px}.service-neighborhood-row button{grid-column:1/-1;width:100%}}
@@ -1178,3 +1173,129 @@ input:not([type=checkbox]):not([type=radio]),select,textarea{max-width:100%;min-
 @media(max-width:900px){.store-hero{width:calc(100% - 24px);min-height:175px}.customer-categories{top:58px}}
 @media(max-width:600px){.page-intro{margin-bottom:16px}.page-intro h1{font-size:25px}.panel{padding:14px;border-radius:14px}.store-hero{width:calc(100% - 20px);min-height:0;margin-top:10px;padding:17px 15px;gap:13px;border-radius:17px;align-items:center}.store-hero .store-photo,.store-hero .store-avatar-big{flex-basis:76px!important;width:76px!important;height:76px!important;min-width:76px;min-height:76px;border-radius:17px;border-width:3px}.store-hero h1{font-size:23px}.store-hero p{font-size:12px}.store-hero small{font-size:11px}.customer-header{padding:9px 12px}.customer-categories{top:54px;padding:10px 12px}.customer-menu section{padding-left:12px;padding-right:12px}.customer-products{grid-template-columns:minmax(0,1fr);gap:10px}.customer-product{grid-template-columns:82px minmax(0,1fr);padding:10px;gap:7px 10px}.food-image{width:82px;height:82px}.category-check-grid{grid-template-columns:repeat(2,minmax(0,1fr));padding:11px;gap:7px}.category-check{min-height:40px;padding:8px;font-size:12px}.dialog-modal{width:min(94vw,520px);max-height:88dvh;overflow:auto;border-radius:16px}}
 @media(max-width:370px){.store-hero{align-items:flex-start}.store-hero .store-photo,.store-hero .store-avatar-big{flex-basis:62px!important;width:62px!important;height:62px!important;min-width:62px;min-height:62px}.store-hero h1{font-size:20px}.category-check-grid{grid-template-columns:minmax(0,1fr)}}
+
+
+/* Ajustes finais de acabamento: avatar, campos e controles */
+*, *::before, *::after { box-sizing: border-box; }
+.sidebar { min-width: 0; overflow-x: hidden; }
+.sidebar-header, .shop-mini, .persistent-link, .side-nav { min-width: 0; max-width: 100%; }
+.shop-mini { position: relative; align-items: center; gap: 10px; padding: 10px; }
+.shop-mini > div:last-of-type { flex: 1 1 auto; min-width: 0; }
+.shop-mini strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shop-avatar { position: relative; flex: 0 0 42px; width: 42px; height: 42px; min-width: 42px; min-height: 42px; overflow: hidden; border-radius: 12px; }
+.shop-avatar { background:#f3e9e3; }
+.shop-avatar-fallback {
+  position:absolute;
+  inset:0;
+  display:grid;
+  place-items:center;
+  color:#fff;
+  font:700 15px "Space Grotesk",sans-serif;
+  background:linear-gradient(135deg,#ffb55f,#f4512c);
+  z-index:0;
+}
+.shop-avatar img { position: absolute; inset: 0; display: block; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; max-width: none; object-fit: cover; object-position: center; border-radius: inherit; }
+.profile-photo img { display: block; width: 100% !important; height: 100% !important; max-width: none; object-fit: cover; object-position: center; border-radius: inherit; }
+.order-history-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); align-items: start; gap: 12px; }
+.order-history-list .empty-panel { grid-column: 1 / -1; }
+.merchant-conversations { display: grid; gap: 14px; }
+.merchant-conversation .panel-heading { margin-bottom: 12px; }
+.merchant-conversation .chat-messages { max-height: 320px; overflow-y: auto; }
+.merchant-order-chat { margin-top: 12px; }
+.persistent-link { display: flex; align-items: center; gap: 9px; padding: 10px; }
+.persistent-link > div { flex: 1 1 0; min-width: 0; overflow: hidden; }
+.persistent-link strong { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.persistent-link button { flex: 0 0 auto; min-height: 34px; padding: 7px 12px; border-radius: 9px; white-space: nowrap; }
+.main-content, .page-content, .panel, .board-tools { min-width: 0; }
+.board-tools { flex-wrap: wrap; }
+.search-field { flex: 1 1 260px; width: auto; min-width: min(100%, 220px); min-height: 44px; gap: 8px; }
+.search-field input { flex: 1 1 auto; min-width: 0; width: 100%; min-height: 42px; padding: 9px 2px; border: 0; box-shadow: none; background: transparent; font: inherit; font-size: 13px; }
+input, select, textarea { min-width: 0; max-width: 100%; }
+.auth-form input, .auth-form select, .dialog-form input, .dialog-form select, .dialog-form textarea,
+.editor-body input, .editor-body textarea, .checkout input, .payment-settings input,
+.payment-settings textarea, .operation-settings input[type=number], .operation-settings select {
+  width: 100%; max-width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px;
+  border-radius: 10px; line-height: 1.35; font-size: 14px; box-sizing: border-box;
+}
+textarea { min-height: 92px; resize: vertical; }
+button, .button { max-width: 100%; font-family: inherit; line-height: 1.2; }
+.primary-button, .secondary-button, .danger-button, .auth-submit { min-height: 42px; padding: 10px 15px; border-radius: 10px; font-size: 12px; letter-spacing: .01em; }
+button:disabled { cursor: not-allowed; opacity: .58; }
+@media (max-width: 760px) {
+  .sidebar { width: min(82vw, 290px); max-width: 290px; }
+  .shop-mini { margin: 12px 0 9px; }
+  .persistent-link { gap: 7px; padding: 8px; }
+  .persistent-link button { padding: 7px 9px; }
+  .board-tools { align-items: stretch; }
+  .search-field { flex: 1 1 100%; width: 100%; }
+  .filter-pills { max-width: 100%; flex-wrap: wrap; }
+  .filter-pills button { flex: 1 1 auto; min-height: 38px; }
+  .primary-button, .secondary-button, .danger-button, .auth-submit { min-height: 40px; }
+}
+
+/* Correção definitiva do avatar da loja no cabeçalho lateral.
+   A foto deve ficar estritamente dentro do quadrado, sem expandir para a sidebar. */
+.shop-mini > .shop-avatar {
+  position: relative !important;
+  display: block !important;
+  flex: 0 0 42px !important;
+  width: 42px !important;
+  height: 42px !important;
+  min-width: 42px !important;
+  min-height: 42px !important;
+  max-width: 42px !important;
+  max-height: 42px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  isolation: isolate !important;
+  clip-path: inset(0 round 12px) !important;
+  border-radius: 12px !important;
+  box-sizing: border-box !important;
+}
+.shop-mini > .shop-avatar .shop-avatar-fallback,
+.shop-mini > .shop-avatar > img {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 42px !important;
+  height: 42px !important;
+  min-width: 42px !important;
+  min-height: 42px !important;
+  max-width: 42px !important;
+  max-height: 42px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+}
+.shop-mini > .shop-avatar > img {
+  object-fit: cover !important;
+  object-position: center center !important;
+  z-index: 2 !important;
+}
+.shop-mini > .shop-avatar .shop-avatar-fallback {
+  z-index: 1 !important;
+}
+
+@media (max-width: 600px) {
+  .shop-mini > .shop-avatar {
+    flex-basis: 42px !important;
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    min-height: 42px !important;
+    max-width: 42px !important;
+    max-height: 42px !important;
+  }
+  .shop-mini > .shop-avatar .shop-avatar-fallback,
+  .shop-mini > .shop-avatar > img {
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    min-height: 42px !important;
+    max-width: 42px !important;
+    max-height: 42px !important;
+  }
+}

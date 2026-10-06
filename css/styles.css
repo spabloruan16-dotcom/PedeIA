@@ -3180,3 +3180,24 @@ transform:translate(-50%,0)}
   .category-tabs button{
   white-space:nowrap}
 }
+
+/* Multi-category product selector */
+.dialog-form select.multi-category-select { min-height: 112px; padding: 8px 10px; }
+.dialog-form select.multi-category-select option { padding: 7px 8px; }
+
+/* Checkout: campos de endereço organizados e adaptáveis */
+#checkout-address-fields{padding:12px;border:1px solid rgba(120,120,120,.18);border-radius:14px;background:rgba(120,120,120,.035);margin:12px 0}
+#checkout-address-fields[hidden]{display:none!important}
+.address-section-title{display:block;font-size:13px;color:var(--ink);margin:2px 0 8px}
+.address-fields-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.optional-label{font-weight:400;opacity:.72}
+@media(max-width:420px){.address-fields-row{grid-template-columns:1fr}}
+
+/* Checkout: bairro atendido e taxa correspondente */
+#checkout-address-fields select[name="neighborhood"]{width:100%;min-height:46px;border:1px solid var(--border-color,rgba(120,120,120,.24));border-radius:10px;padding:10px 12px;background:var(--surface,#fff);color:var(--text,#222);font:inherit}
+.checkout-delivery-fee{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;margin:10px 0 14px;border:1px solid rgba(185,54,43,.22);border-radius:12px;background:rgba(185,54,43,.055)}
+.checkout-delivery-fee span{font-size:.9rem;color:var(--muted,#666)}
+.checkout-delivery-fee strong{font-size:1rem;color:var(--text,#222)}
+
+/* Resumo e histórico de entregas */
+.courier-today-summary{display:flex;flex-wrap:wrap;gap:8px 18px;padding:12px 14px;margin:10px 0;background:var(--surface-soft,#f4f6f2);border-radius:12px;color:var(--text,#252a27)}.courier-history-panel{margin-top:16px}.courier-history-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--border,#e2e8e1)}.courier-history-row:first-child{border-top:0}.courier-history-row small{display:block;color:var(--muted,#737b74);margin-top:4px}.courier-history-row>strong{white-space:nowrap}
