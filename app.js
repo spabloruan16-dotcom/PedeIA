@@ -31,6 +31,9 @@ const blank = {
   cart: [],
   orderQuery: '',
   orderFilter: '',
+  historyPeriod: 'all',
+  chatFilter: 'all',
+  chatStatusFilter: 'all',
   delivery: {
     pickup: true,
     delivery: true,
@@ -65,6 +68,7 @@ let adminMerchants = [];
 let adminTickets = [];
 let merchantTickets = [];
 let supportThread = null;
+let merchantChatOpenId = null;
 let supportMessagesList = [];
 let lastAdminSupportPoll = 0;
 let lastAdminSupportStamp = null;
@@ -81,6 +85,11 @@ let couriersLoading = false;
 let courierHistoryRows = [];
 let courierHistoryId = null;
 let customerChatRefreshTimer = null;
+let tutorialRobotHidden = false;
+let tutorialOverlayOpen = false;
+let tutorialState = { view: null, step: 0 };
+let adminSupportContact = { name: '', phone: '' };
+let adminSupportContactLoaded = false;
 
 function fingerprint(value) {
   try {
@@ -149,7 +158,8 @@ async function syncServerState() {
       view: state.view,
       customerView: state.customerView,
       orderQuery: state.orderQuery,
-      orderFilter: state.orderFilter
+      orderFilter: state.orderFilter,
+      historyPeriod: state.historyPeriod || 'all'
     };
     if (fingerprint(state) !== fingerprint(merged)) {
       state = merged;
@@ -173,7 +183,8 @@ async function loadFromServer() {
         view: state.view,
         customerView: state.customerView,
         orderQuery: state.orderQuery,
-        orderFilter: state.orderFilter
+        orderFilter: state.orderFilter,
+      historyPeriod: state.historyPeriod || 'all'
       };
       state = merged;
       localStorage.setItem(stateKey, JSON.stringify(merged));
@@ -405,7 +416,8 @@ async function attachMerchantToUser(user, details = {}) {
     messages: [],
     cart: [],
     orderQuery: '',
-    orderFilter: ''
+    orderFilter: '',
+    historyPeriod: 'all'
   };
   await save();
   return true;
@@ -550,15 +562,26 @@ async function loadMerchantOrderMessages() {
 
 async function courierRequest(path,method='GET',body){return merchantApiRequest(path,method,body);}
 async function loadCouriers(){const r=await courierRequest('/api/merchant/couriers');merchantCouriers=r.entregadores||[];couriersLoaded=true;}
-function couriersView(){return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA DA LOJA</p><h1>Central de entregadores</h1><p class="intro-copy">Cadastre motoboys, compartilhe o acesso individual e atribua pedidos para entrega.</p></div><button class="secondary-button" data-courier-refresh>Atualizar</button></section><section class="panel courier-panel"><div class="panel-heading"><div><h2>Cadastrar motoboy</h2><p>O link de acesso é exibido uma única vez ao criar ou renovar.</p></div></div><form id="courier-create-form" class="courier-form"><label>Nome completo<input name="nome" required maxlength="120" placeholder="Nome do entregador"></label><label>Telefone<input name="telefone" maxlength="40" placeholder="(00) 00000-0000"></label><label>Veículo<input name="veiculo" maxlength="80" placeholder="Moto, placa opcional"></label><button class="primary-button" type="submit">Cadastrar e gerar link</button></form>${newlyCreatedCourierLink?`<div class="courier-link-notice"><strong>Link individual criado</strong><input readonly value="${esc(newlyCreatedCourierLink)}" id="courier-generated-link"><button type="button" class="secondary-button" data-courier-copy>Copiar link</button><small>Guarde este link e envie apenas ao entregador. Se perdê-lo, desative este cadastro e crie outro.</small></div>`:''}</section><section class="courier-list">${merchantCouriers.map(c=>`<article class="panel courier-card"><div class="courier-card-top"><div><strong>${esc(c.nome)}</strong><small>${esc(c.telefone||'Sem telefone')} ${c.veiculo?'· '+esc(c.veiculo):''}</small></div><span class="courier-state ${c.ativo?'active':'inactive'}">${c.ativo?'Ativo':'Desativado'}</span></div><p>${Number(c.pedidos_ativos||0)} pedido(s) ativo(s)</p><div class="courier-today-summary"><strong>${Number(c.entregas_hoje||0)} entregas hoje</strong><span>Taxas do dia: ${money(Number(c.ganhos_hoje||0))}</span></div><div class="courier-actions"><button class="secondary-button" data-courier-history="${c.id}">Histórico de entregas</button><button class="secondary-button" data-courier-assign="${c.id}" ${!c.ativo?'disabled':''}>Atribuir pedido</button><button class="secondary-button" data-courier-toggle="${c.id}" data-active="${c.ativo?'true':'false'}">${c.ativo?'Desativar':'Ativar'}</button><button class="secondary-button" data-courier-delete="${c.id}">Excluir</button></div></article>`).join('')||'<div class="panel"><p>Nenhum entregador cadastrado ainda.</p></div>'}</section>${courierHistoryId?`<section class="panel courier-history-panel"><div class="panel-heading"><div><h2>Histórico de ${esc(merchantCouriers.find(c=>c.id===courierHistoryId)?.nome||'entregador')}</h2><p>Entregas concluídas e taxas registradas.</p></div><button class="secondary-button" data-courier-history-close>Fechar</button></div><div class="courier-history-list">${courierHistoryRows.map(h=>`<article class="courier-history-row"><div><strong>Pedido #${esc(String(h.pedido_id).slice(0,8))}</strong><small>${new Date(h.concluida_em).toLocaleString('pt-BR')} · ${esc(h.endereco||'Endereço não informado')}</small></div><strong>${money(Number(h.taxa_recebida||0))}</strong></article>`).join('')||'<p class="admin-empty">Nenhuma entrega concluída registrada.</p>'}</div></section>`:''}<section class="panel courier-note"><strong>Sobre as rotas</strong><p>O motoboy acessa seus pedidos por um link protegido. A rota abre no Google Maps com os endereços atribuídos. A otimização automática por proximidade e o rastreamento GPS contínuo dependem da próxima etapa de geolocalização e mapas.</p></section>`;}
-function bindCouriers(){document.querySelectorAll('[data-courier-history]').forEach(b=>b.onclick=async()=>{try{const r=await courierRequest('/api/merchant/couriers/history?entregador_id='+encodeURIComponent(b.dataset.courierHistory));courierHistoryRows=r.historico||[];courierHistoryId=b.dataset.courierHistory;render();}catch(e){notify(e.message);}});document.querySelector('[data-courier-history-close]')?.addEventListener('click',()=>{courierHistoryId=null;courierHistoryRows=[];render();});document.querySelector('#courier-create-form')?.addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const data=new FormData(form);try{const r=await courierRequest('/api/merchant/couriers','POST',{nome:data.get('nome'),telefone:data.get('telefone'),veiculo:data.get('veiculo')});newlyCreatedCourierLink=`${location.origin}/motoboy?token=${encodeURIComponent(r.token)}`;await loadCouriers();render();notify('Entregador cadastrado. Copie e compartilhe o link.');}catch(err){notify(err.message);}});document.querySelector('[data-courier-refresh]')?.addEventListener('click',async()=>{try{await loadCouriers();render();}catch(e){notify(e.message);}});document.querySelector('[data-courier-copy]')?.addEventListener('click',()=>{const input=document.querySelector('#courier-generated-link');input?.select();if(input)navigator.clipboard?.writeText(input.value).then(()=>notify('Link copiado.')).catch(()=>notify('Selecione e copie o link manualmente.'));});document.querySelectorAll('[data-courier-toggle]').forEach(b=>b.onclick=async()=>{try{await courierRequest(`/api/merchant/couriers/${b.dataset.courierToggle}`,'PATCH',{ativo:b.dataset.active!=='true'});await loadCouriers();render();}catch(e){notify(e.message);}});document.querySelectorAll('[data-courier-delete]').forEach(b=>b.onclick=async()=>{if(!confirm('Excluir este entregador? Os pedidos serão desvinculados.'))return;try{const removed=await courierRequest(`/api/merchant/couriers/${b.dataset.courierDelete}`,'DELETE');await loadCouriers();render();notify(removed.archived?'Entregador arquivado para preservar o histórico.':'Entregador removido.');}catch(e){notify(e.message);}});document.querySelectorAll('[data-courier-assign]').forEach(b=>b.onclick=async()=>{const pending=(state.orders||[]).filter(o=>o.fulfillment==='delivery'&&!['Entregue','Cancelado','Cancelada'].includes(o.status));if(!pending.length){notify('Não há pedidos de entrega disponíveis.');return;}const choices=pending.map((o,i)=>`${i+1}. ${o.customer||'Cliente'} · ${o.status} · ${o.address||'Sem endereço'}`).join('\n');const picked=prompt(`Digite o número do pedido para atribuir:\n${choices}`);if(!picked)return;const order=pending[Number(picked)-1];if(!order){notify('Número de pedido inválido.');return;}try{await courierRequest(`/api/merchant/couriers/${b.dataset.courierAssign}/assign`,'POST',{pedido_id:order.id});await loadCouriers();await loadMerchantState();render();notify('Pedido atribuído ao entregador.');}catch(e){notify(e.message);}});}
+function couriersView(){return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA DA LOJA</p><h1>Central de entregadores</h1><p class="intro-copy">Cadastre motoboys, compartilhe o acesso individual e atribua pedidos para entrega.</p></div><button class="secondary-button" data-courier-refresh>Atualizar</button></section><section class="panel courier-panel"><div class="panel-heading"><div><h2>Cadastrar motoboy</h2><p>O link de acesso é exibido uma única vez ao criar ou renovar.</p></div></div><form id="courier-create-form" class="courier-form"><label>Nome completo<input name="nome" required maxlength="120" placeholder="Nome do entregador"></label><label>Telefone<input name="telefone" maxlength="40" placeholder="(00) 00000-0000"></label><label>Veículo<input name="veiculo" maxlength="80" placeholder="Moto, placa opcional"></label><button class="primary-button" type="submit">Cadastrar e gerar link</button></form>${newlyCreatedCourierLink?`<div class="courier-link-notice"><strong>Link individual criado</strong><input readonly value="${esc(newlyCreatedCourierLink)}" id="courier-generated-link"><button type="button" class="secondary-button" data-courier-copy>Copiar link</button><small>Guarde este link e envie apenas ao entregador. Se perdê-lo, desative este cadastro e crie outro.</small></div>`:''}</section><section class="courier-list">${merchantCouriers.map(c=>`<article class="panel courier-card"><div class="courier-card-top"><div><strong>${esc(c.nome)}</strong><small>${esc(c.telefone||'Sem telefone')} ${c.veiculo?'· '+esc(c.veiculo):''}</small></div><span class="courier-state ${c.ativo?'active':'inactive'}">${c.ativo?'Ativo':'Desativado'}</span></div><p>${Number(c.pedidos_ativos||0)} pedido(s) ativo(s)</p><div class="courier-today-summary"><strong>${Number(c.entregas_hoje||0)} entregas hoje</strong><span>Taxas do dia: ${money(Number(c.ganhos_hoje||0))}</span></div><div class="courier-actions"><button class="secondary-button" data-courier-history="${c.id}">Histórico de entregas</button><button class="secondary-button" data-courier-copy-link="${c.id}" ${!c.ativo?'disabled':''}>Copiar link</button><button class="secondary-button" data-courier-toggle="${c.id}" data-active="${c.ativo?'true':'false'}">${c.ativo?'Desativar':'Ativar'}</button><button class="secondary-button" data-courier-delete="${c.id}">Excluir</button></div></article>`).join('')||'<div class="panel"><p>Nenhum entregador cadastrado ainda.</p></div>'}</section>${courierHistoryId?`<section class="panel courier-history-panel"><div class="panel-heading"><div><h2>Histórico de ${esc(merchantCouriers.find(c=>c.id===courierHistoryId)?.nome||'entregador')}</h2><p>Entregas concluídas e taxas registradas.</p></div><button class="secondary-button" data-courier-history-close>Fechar</button></div><div class="courier-history-list">${courierHistoryRows.map(h=>`<article class="courier-history-row"><div><strong>Pedido #${esc(String(h.pedido_id).slice(0,8))}</strong><small>${new Date(h.concluida_em).toLocaleString('pt-BR')} · ${esc(h.endereco||'Endereço não informado')}</small></div><strong>${money(Number(h.taxa_recebida||0))}</strong></article>`).join('')||'<p class="admin-empty">Nenhuma entrega concluída registrada.</p>'}</div></section>`:''}<section class="panel courier-note"><strong>Sobre as rotas</strong><p>O motoboy acessa seus pedidos por um link protegido. A rota abre no Google Maps com os endereços atribuídos. A otimização automática por proximidade e o rastreamento GPS contínuo dependem da próxima etapa de geolocalização e mapas.</p></section>`;}
+function bindCouriers(){
+  document.querySelectorAll('[data-courier-history]').forEach(b=>b.onclick=async()=>{try{const r=await courierRequest('/api/merchant/couriers/history?entregador_id='+encodeURIComponent(b.dataset.courierHistory));courierHistoryRows=r.historico||[];courierHistoryId=b.dataset.courierHistory;render();}catch(e){notify(e.message);}});
+  document.querySelector('[data-courier-history-close]')?.addEventListener('click',()=>{courierHistoryId=null;courierHistoryRows=[];render();});
+  document.querySelector('#courier-create-form')?.addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const data=new FormData(form);try{const r=await courierRequest('/api/merchant/couriers','POST',{nome:data.get('nome'),telefone:data.get('telefone'),veiculo:data.get('veiculo')});newlyCreatedCourierLink=`${location.origin}/motoboy?token=${encodeURIComponent(r.token)}`;await loadCouriers();render();notify('Entregador cadastrado. Copie e compartilhe o link.');}catch(err){notify(err.message);}});
+  document.querySelector('[data-courier-refresh]')?.addEventListener('click',async()=>{try{await loadCouriers();render();}catch(e){notify(e.message);}});
+  document.querySelector('[data-courier-copy]')?.addEventListener('click',()=>{const input=document.querySelector('#courier-generated-link');input?.select();if(input)navigator.clipboard?.writeText(input.value).then(()=>notify('Link copiado.')).catch(()=>notify('Selecione e copie o link manualmente.'));});
+  document.querySelectorAll('[data-courier-copy-link]').forEach(b=>b.onclick=async()=>{try{const r=await courierRequest(`/api/merchant/couriers/${encodeURIComponent(b.dataset.courierCopyLink)}/link`,'POST',{});await navigator.clipboard.writeText(r.link);notify('Link do entregador copiado.');}catch(e){notify(e.message||'Não foi possível gerar o link.');}});
+  document.querySelectorAll('[data-courier-toggle]').forEach(b=>b.onclick=async()=>{try{await courierRequest(`/api/merchant/couriers/${b.dataset.courierToggle}`,'PATCH',{ativo:b.dataset.active!=='true'});await loadCouriers();render();}catch(e){notify(e.message);}});
+  document.querySelectorAll('[data-courier-delete]').forEach(b=>b.onclick=async()=>{if(!confirm('Excluir este entregador? Os pedidos serão desvinculados.'))return;try{const removed=await courierRequest(`/api/merchant/couriers/${b.dataset.courierDelete}`,'DELETE');await loadCouriers();render();notify(removed.archived?'Entregador arquivado para preservar o histórico.':'Entregador removido.');}catch(e){notify(e.message);}});
+}
+
 function merchantSupportView(){const current=merchantTickets.find(t=>t.id===supportThread);return `<section class="page-intro"><div><p class="eyebrow">ATENDIMENTO PEDEIA</p><h1>Falar com o administrador</h1><p class="intro-copy">Tire dúvidas, informe problemas ou envie comprovantes de pagamento.</p></div></section><section class="panel support-layout"><div class="support-list"><form id="support-new-form" class="support-new"><h3>Abrir chamado</h3><label>Tipo<select name="tipo"><option value="suporte">Suporte técnico</option><option value="cobranca">Mensalidade / cobrança</option><option value="geral">Outro assunto</option></select></label><label>Assunto<input name="assunto" required maxlength="160" placeholder="Ex.: Problema nos pedidos"></label><label>Mensagem<textarea name="conteudo" required maxlength="10000" placeholder="Descreva como podemos ajudar"></textarea></label><label class="support-file">Anexar imagem ou PDF (opcional)<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label><button class="primary-button">Enviar chamado</button></form><h3>Minhas conversas</h3>${merchantTickets.map(t=>`<button class="support-ticket ${supportThread===t.id?'selected':''}" data-support-open="${t.id}"><strong>${esc(t.assunto)}</strong><small>${esc(t.tipo)} · ${esc(t.status)} · ${new Date(t.updated_at).toLocaleDateString('pt-BR')}</small><span>${esc(t.ultima_mensagem||'')}</span></button>`).join('')||'<p class="admin-empty">Você ainda não tem chamados.</p>'}</div><div class="support-conversation"><h3>${current?esc(current.assunto):'Selecione uma conversa'}</h3><div class="support-messages">${current?supportMessagesHtml():'<p class="admin-empty">Abra um chamado ou selecione uma conversa para ver as mensagens.</p>'}</div>${current?`<form id="support-reply-form" class="support-compose"><textarea name="conteudo" placeholder="Escreva sua resposta"></textarea><label class="support-file">Anexar imagem ou PDF<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label><button class="primary-button">Enviar resposta</button></form>`:''}</div></section>`;}
 function bindSupportMerchant(){document.querySelector('#support-new-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{const file=e.currentTarget.querySelector('input[type=file]')?.files?.[0];let attachment=null;if(file)attachment=await supportUpload(file,authenticatedUser.id);const result=await supportRequest('/api/support','POST',{tipo:f.get('tipo'),assunto:f.get('assunto'),conteudo:f.get('conteudo'),anexo_url:attachment?.path,anexo_nome:attachment?.name,anexo_tipo:attachment?.type});await loadMerchantTickets();await openSupportThread(result.atendimento.id,false);notify('Chamado enviado.');}catch(err){notify(err.message);}});document.querySelectorAll('[data-support-open]').forEach(b=>b.onclick=()=>openSupportThread(b.dataset.supportOpen,false));document.querySelector('#support-reply-form')?.addEventListener('submit',e=>{e.preventDefault();sendSupportMessage(false);});bindSupportPreviews();}
 function adminPanel() {
+  if (!adminSupportContactLoaded) loadAdminSupportContact().then(()=>{ if(isAdmin) adminPanel(); });
   const active = adminMerchants.filter(m => m.status_assinatura === 'ativa' && (!m.fim_assinatura || Date.parse(m.fim_assinatura) >= Date.now())).length;
   const pending = adminMerchants.filter(m => m.status_assinatura === 'pendente').length;
   const expired = adminMerchants.filter(m => m.status_assinatura !== 'ativa' || (m.fim_assinatura && Date.parse(m.fim_assinatura) < Date.now())).length;
-  app.innerHTML = `<main class="admin-shell"><header class="admin-header"><div>${brand()}<p class="eyebrow">CENTRAL DE CONTROLE</p><h1>Painel administrativo</h1><p>Gerencie comerciantes e assinaturas do PedeIA.</p></div><div class="admin-user"><span>${esc(authenticatedUser?.email || '')}</span><button class="secondary-button" data-action="logout">Sair</button></div></header><section class="admin-stats"><article><span>Comerciantes</span><strong>${adminMerchants.length}</strong></article><article><span>Assinaturas ativas</span><strong>${active}</strong></article><article><span>Pendentes</span><strong>${pending}</strong></article><article><span>Expiradas / suspensas</span><strong>${expired}</strong></article></section><section class="admin-list"><div class="admin-list-heading"><div><h2>Comerciantes</h2><p>Ative, renove ou suspenda o acesso.</p></div><button class="secondary-button" data-admin-refresh>Atualizar</button></div>${adminMerchants.length ? adminMerchants.map(m => { const exp = m.fim_assinatura ? new Date(m.fim_assinatura).toLocaleDateString('pt-BR') : 'Sem prazo'; const live = m.status_assinatura === 'ativa' && (!m.fim_assinatura || Date.parse(m.fim_assinatura) >= Date.now()); return `<article class="admin-merchant"><div class="admin-merchant-info"><strong>${esc(m.nome || 'Comerciante')}</strong><span>${esc(m.email || '')}</span><small>${esc(m.loja_nome || 'Loja ainda não cadastrada')} · ${Number(m.total_pedidos || 0)} pedidos</small></div><div class="admin-merchant-status"><b class="admin-status ${live ? 'active' : m.status_assinatura === 'pendente' ? 'pending' : 'blocked'}">${live ? 'Ativa' : esc(m.status_assinatura || 'pendente')}</b><small>Vencimento: ${exp}</small></div><div class="admin-actions"><button class="primary-button" data-admin-status="ativa" data-admin-id="${m.id}">Ativar 30 dias</button><button class="secondary-button" data-admin-message="${m.id}">Enviar mensagem</button><button class="secondary-button" data-admin-status="suspensa" data-admin-id="${m.id}">Suspender</button><button class="secondary-button" data-admin-status="pendente" data-admin-id="${m.id}">Pendente</button></div></article>`; }).join('') : '<p class="admin-empty">Nenhum comerciante cadastrado ainda.</p>'}</section><section class="admin-list support-admin"><div class="admin-list-heading"><div><h2>Central de atendimento</h2><p>Mensagens, cobranças e chamados dos comerciantes.</p></div><button class="secondary-button" data-support-refresh>Atualizar</button></div><div class="support-layout"><div class="support-list">${adminTickets.map(t=>`<article class="support-ticket-wrap ${supportThread===t.id?'selected':''}"><button class="support-ticket" data-admin-thread="${t.id}"><strong>${esc(t.loja_nome||t.comerciante_nome||'Comerciante')}</strong><small>${esc(t.tipo)} · ${esc(t.status)}</small><span>${esc(t.assunto)} — ${esc(t.ultima_mensagem||'')}</span></button><div class="support-ticket-controls"><label>Status<select data-ticket-status="${t.id}"><option value="novo" ${t.status==='novo'?'selected':''}>Novo</option><option value="em_andamento" ${t.status==='em_andamento'?'selected':''}>Em andamento</option><option value="resolvido" ${t.status==='resolvido'?'selected':''}>Resolvido</option></select></label><button type="button" class="secondary-button" data-ticket-delete="${t.id}">Excluir</button></div></article>`).join('')||'<p class="admin-empty">Nenhum atendimento recebido.</p>'}</div><div class="support-conversation"><h3>${supportThread?(adminTickets.find(t=>t.id===supportThread)?.assunto||'Conversa'): 'Selecione um atendimento'}</h3><div class="support-messages">${supportThread?supportMessagesHtml():'<p class="admin-empty">Selecione uma conversa para responder.</p>'}</div>${supportThread?`<form id="support-reply-form" class="support-compose"><textarea name="conteudo" placeholder="Digite sua resposta"></textarea><label class="support-file">Anexar QR Code, imagem ou PDF<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label><button class="primary-button">Enviar resposta</button></form>`:''}</div></div></section></main>`;
+  app.innerHTML = `<main class="admin-shell"><header class="admin-header"><div>${brand()}<p class="eyebrow">CENTRAL DE CONTROLE</p><h1>Painel administrativo</h1><p>Gerencie comerciantes e assinaturas do PedeIA.</p></div><div class="admin-user"><span>${esc(authenticatedUser?.email || '')}</span><button class="secondary-button" data-action="logout">Sair</button></div></header><section class="admin-stats"><article><span>Comerciantes</span><strong>${adminMerchants.length}</strong></article><article><span>Assinaturas ativas</span><strong>${active}</strong></article><article><span>Pendentes</span><strong>${pending}</strong></article><article><span>Expiradas / suspensas</span><strong>${expired}</strong></article></section><section class="admin-list admin-contact-panel"><div class="admin-list-heading"><div><h2>WhatsApp de atendimento</h2><p>Este número será usado pelo botão “Falar com o administrador” quando a assinatura estiver pendente, suspensa ou expirada.</p></div></div><form id="admin-contact-form" class="admin-contact-form"><label>Nome para atendimento<input name="name" maxlength="100" value="${esc(adminSupportContact.name||'')}" placeholder="Ex.: Suporte PedeIA"></label><label>Número do WhatsApp<input name="phone" maxlength="30" value="${esc(adminSupportContact.phone||'')}" placeholder="Ex.: 5581999999999"></label><button class="primary-button">Salvar contato</button></form></section><section class="admin-list"><div class="admin-list-heading"><div><h2>Comerciantes</h2><p>Ative, renove ou suspenda o acesso.</p></div><button class="secondary-button" data-admin-refresh>Atualizar</button></div>${adminMerchants.length ? adminMerchants.map(m => { const exp = m.fim_assinatura ? new Date(m.fim_assinatura).toLocaleDateString('pt-BR') : 'Sem prazo'; const live = m.status_assinatura === 'ativa' && (!m.fim_assinatura || Date.parse(m.fim_assinatura) >= Date.now()); return `<article class="admin-merchant"><div class="admin-merchant-info"><strong>${esc(m.nome || 'Comerciante')}</strong><span>${esc(m.email || '')}</span><small>${esc(m.loja_nome || 'Loja ainda não cadastrada')} · ${Number(m.total_pedidos || 0)} pedidos</small></div><div class="admin-merchant-status"><b class="admin-status ${live ? 'active' : m.status_assinatura === 'pendente' ? 'pending' : 'blocked'}">${live ? 'Ativa' : esc(m.status_assinatura || 'pendente')}</b><small>Vencimento: ${exp}</small></div><div class="admin-actions"><button class="primary-button" data-admin-status="ativa" data-admin-id="${m.id}">Ativar 30 dias</button><button class="secondary-button" data-admin-message="${m.id}">Enviar mensagem</button><button class="secondary-button" data-admin-status="suspensa" data-admin-id="${m.id}">Suspender</button><button class="secondary-button" data-admin-status="pendente" data-admin-id="${m.id}">Pendente</button></div></article>`; }).join('') : '<p class="admin-empty">Nenhum comerciante cadastrado ainda.</p>'}</section><section class="admin-list support-admin"><div class="admin-list-heading"><div><h2>Central de atendimento</h2><p>Mensagens, cobranças e chamados dos comerciantes.</p></div><button class="secondary-button" data-support-refresh>Atualizar</button></div><div class="support-layout"><div class="support-list">${adminTickets.map(t=>`<article class="support-ticket-wrap ${supportThread===t.id?'selected':''}"><button class="support-ticket" data-admin-thread="${t.id}"><strong>${esc(t.loja_nome||t.comerciante_nome||'Comerciante')}</strong><small>${esc(t.tipo)} · ${esc(t.status)}</small><span>${esc(t.assunto)} — ${esc(t.ultima_mensagem||'')}</span></button><div class="support-ticket-controls"><label>Status<select data-ticket-status="${t.id}"><option value="novo" ${t.status==='novo'?'selected':''}>Novo</option><option value="em_andamento" ${t.status==='em_andamento'?'selected':''}>Em andamento</option><option value="resolvido" ${t.status==='resolvido'?'selected':''}>Resolvido</option></select></label><button type="button" class="secondary-button" data-ticket-delete="${t.id}">Excluir</button></div></article>`).join('')||'<p class="admin-empty">Nenhum atendimento recebido.</p>'}</div><div class="support-conversation"><h3>${supportThread?(adminTickets.find(t=>t.id===supportThread)?.assunto||'Conversa'): 'Selecione um atendimento'}</h3><div class="support-messages">${supportThread?supportMessagesHtml():'<p class="admin-empty">Selecione uma conversa para responder.</p>'}</div>${supportThread?`<form id="support-reply-form" class="support-compose"><textarea name="conteudo" placeholder="Digite sua resposta"></textarea><label class="support-file">Anexar QR Code, imagem ou PDF<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label><button class="primary-button">Enviar resposta</button></form>`:''}</div></div></section></main>`;
   bindSupportPreviews();
   document.querySelector('[data-support-refresh]')?.addEventListener('click',async()=>{try{await loadAdminTickets();adminPanel();}catch(e){notify(e.message);}});
   document.querySelectorAll('[data-admin-thread]').forEach(b=>b.onclick=()=>openSupportThread(b.dataset.adminThread,true));
@@ -575,6 +598,7 @@ function adminPanel() {
     try { await adminRequest(`/api/admin/merchants/${encodeURIComponent(id)}/subscription`, 'PATCH', { status, days: 30 }); await loadAdminMerchants(); adminPanel(); notify('Assinatura atualizada com sucesso.'); }
     catch (e) { button.disabled = false; notify(e.message); }
   }));
+  document.querySelector('#admin-contact-form')?.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{await adminRequest('/api/admin/support-contact','PATCH',{name:String(fd.get('name')||'').trim(),phone:String(fd.get('phone')||'').trim()});adminSupportContact={name:String(fd.get('name')||'').trim(),phone:String(fd.get('phone')||'').trim()};adminSupportContactLoaded=true;notify('Contato do WhatsApp salvo.');adminPanel();}catch(err){notify(err.message);}});
   document.querySelector('[data-action="logout"]')?.addEventListener('click', () => window.pedeiaSupabase.auth.signOut());
 }
 
@@ -961,7 +985,7 @@ function merchantPanel() {
 
         <nav class="side-nav" id="merchant-navigation">
           ${nav('orders', 'orders', 'Pedidos', activeOrders().length)}
-          ${nav('history', 'history', 'Histórico', archivedOrders().length)}
+          ${nav('history', 'history', 'Histórico', state.orders.filter((order) => ['Entregue', 'Finalizado', 'Cancelado', 'Cancelada'].includes(String(order.status || '').trim())).length)}
           ${nav('couriers', 'delivery', 'Entregadores')}
           ${nav('dashboard', 'home', 'Visao geral')}
           ${nav('menu', 'menu', 'Cardapio')}
@@ -998,6 +1022,7 @@ function merchantPanel() {
   `;
 
   bindMerchant();
+  initTutorialForView();
   if(page==='support') bindSupportMerchant();
   if(page==='couriers'){bindCouriers();if(!couriersLoaded&&!couriersLoading){couriersLoading=true;loadCouriers().then(()=>{if(state.view==='couriers')render();}).catch(e=>notify(e.message)).finally(()=>{couriersLoading=false;});}}
   document.querySelectorAll('.settings-disclosure').forEach((item) => {
@@ -1184,14 +1209,33 @@ function closeShopAtScheduledTime(now = new Date()) {
   notify('A loja foi fechada conforme o horário de funcionamento.');
 }
 
+function historyPeriodStart(period = state.historyPeriod || 'all', now = Date.now()) {
+  if (period === 'today') {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+  const days = { '7': 7, '30': 30, '90': 90, '365': 365 }[period];
+  return days ? now - (days * 86400000) : 0;
+}
+
+function historyOrders() {
+  const start = historyPeriodStart();
+  return filteredOrders()
+    .filter((order) => ['Entregue', 'Finalizado', 'Cancelado', 'Cancelada'].includes(String(order.status || '').trim()))
+    .filter((order) => !start || Number(order.createdAt || 0) >= start)
+    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+}
+
 function orderHistoryView() {
-  const orders = filteredOrders().filter(isArchivedOrder);
+  const orders = historyOrders();
+  const period = state.historyPeriod || 'all';
   return `
     <section class="page-intro board-intro">
       <div>
         <p class="eyebrow">PEDIDOS CONCLUÍDOS</p>
         <h1>Histórico de pedidos</h1>
-        <p class="intro-copy">Os pedidos entregues ficam disponíveis aqui após o horário de fechamento da loja.</p>
+        <p class="intro-copy">Consulte pedidos antigos, entregues e cancelados. O histórico não depende mais do horário de fechamento da loja.</p>
       </div>
     </section>
     <div class="board-tools">
@@ -1205,8 +1249,20 @@ function orderHistoryView() {
         <button class="${state.orderFilter === 'pickup' ? 'selected' : ''}" data-filter="pickup">Retirada</button>
       </div>
     </div>
+    <div class="history-period-bar" aria-label="Período do histórico">
+      <span>Período:</span>
+      <div class="filter-pills">
+        <button class="${period === 'today' ? 'selected' : ''}" data-history-period="today">Hoje</button>
+        <button class="${period === '7' ? 'selected' : ''}" data-history-period="7">7 dias</button>
+        <button class="${period === '30' ? 'selected' : ''}" data-history-period="30">30 dias</button>
+        <button class="${period === '90' ? 'selected' : ''}" data-history-period="90">90 dias</button>
+        <button class="${period === '365' ? 'selected' : ''}" data-history-period="365">1 ano</button>
+        <button class="${period === 'all' ? 'selected' : ''}" data-history-period="all">Todos</button>
+      </div>
+    </div>
+    <section class="history-summary"><strong>${orders.length}</strong><span>pedido(s) no período selecionado</span></section>
     <section class="order-history-list">
-      ${orders.map((order) => orderCard(order, true)).join('') || empty('Histórico vazio', 'Os pedidos entregues serão arquivados após o fechamento da loja.')}
+      ${orders.map((order) => orderCard(order, true)).join('') || empty('Histórico vazio', 'Não há pedidos concluídos ou cancelados no período selecionado.')}
     </section>
   `;
 }
@@ -1407,21 +1463,60 @@ function categoryView() {
 }
 
 function chatView() {
-  const orders = state.orders.slice(0, 50);
+  const filter = state.chatFilter || 'all';
+  const statusFilter = state.chatStatusFilter || 'all';
+  const active = activeOrders();
+  const withMessages = active.filter((order) => state.messages.some((message) => message.scope === 'order' && String(message.orderId) === String(order.id)));
+  const filtered = withMessages.filter((order) => {
+    const typeOk = filter === 'all' || String(order.fulfillment || '').toLowerCase() === filter;
+    const statusOk = statusFilter === 'all' || String(order.status || '').trim() === statusFilter;
+    return typeOk && statusOk;
+  }).sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+
   return `
     <section class="page-intro">
       <div>
         <p class="eyebrow">CONVERSE COM QUEM PEDIU</p>
         <h1>Conversas</h1>
-        <p class="intro-copy">Cada conversa fica ligada ao pedido do cliente.</p>
+        <p class="intro-copy">Somente conversas de pedidos ativos. Clique em um pedido para abrir a conversa.</p>
       </div>
     </section>
 
+    <section class="chat-toolbar panel">
+      <div class="chat-filter-group" aria-label="Tipo de pedido">
+        <span>Tipo:</span>
+        <button class="filter-pill ${filter === 'all' ? 'selected' : ''}" data-chat-filter="all">Todos</button>
+        <button class="filter-pill ${filter === 'delivery' ? 'selected' : ''}" data-chat-filter="delivery">Entrega</button>
+        <button class="filter-pill ${filter === 'pickup' ? 'selected' : ''}" data-chat-filter="pickup">Retirada</button>
+      </div>
+      <label class="chat-status-filter">Status:
+        <select data-chat-status-filter>
+          <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>Todos os ativos</option>
+          <option value="Aguardando" ${statusFilter === 'Aguardando' ? 'selected' : ''}>Aguardando</option>
+          <option value="Em preparo" ${statusFilter === 'Em preparo' ? 'selected' : ''}>Em preparo</option>
+          <option value="Pronto" ${statusFilter === 'Pronto' ? 'selected' : ''}>Pronto</option>
+          <option value="Saiu para entrega" ${statusFilter === 'Saiu para entrega' ? 'selected' : ''}>Saiu para entrega</option>
+          <option value="Em rota" ${statusFilter === 'Em rota' ? 'selected' : ''}>Em rota</option>
+        </select>
+      </label>
+      <span class="chat-result-count">${filtered.length} conversa(s)</span>
+    </section>
+
     <section class="merchant-conversations">
-      ${orders.map((order) => {
+      ${filtered.map((order) => {
         const messages = state.messages.filter((message) => message.scope === 'order' && String(message.orderId) === String(order.id));
-        return `<article class="panel merchant-conversation"><div class="panel-heading"><div><h2>Pedido ${esc(order.id)}</h2><p>${esc(order.customer || 'Cliente')} · ${esc(order.status)}</p></div></div><div class="chat-messages compact">${messages.map((message) => `<div class="message ${message.from === 'merchant' ? 'mine' : ''}">${esc(message.text)}<small>${esc(message.time)}</small></div>`).join('') || '<small>Nenhuma mensagem neste pedido.</small>'}</div><form class="chat-compose merchant-order-chat" data-order-chat="${esc(order.id)}"><input name="message" required maxlength="2000" placeholder="Responder ao cliente"><button type="submit">Enviar</button></form></article>`;
-      }).join('') || empty('Nenhum pedido para conversar', 'As conversas aparecem aqui quando um cliente enviar uma mensagem sobre um pedido.')}
+        const last = messages[messages.length - 1];
+        const open = String(merchantChatOpenId || '') === String(order.id);
+        const fulfillmentLabel = String(order.fulfillment || '').toLowerCase() === 'delivery' ? 'Entrega' : 'Retirada';
+        return `<article class="panel merchant-conversation ${open ? 'is-open' : ''}">
+          <button type="button" class="merchant-conversation-toggle" data-chat-open="${esc(order.id)}" aria-expanded="${open ? 'true' : 'false'}">
+            <span class="conversation-avatar" aria-hidden="true">${String(order.customer || 'C').trim().slice(0,1).toUpperCase()}</span>
+            <span class="conversation-main"><strong>${esc(order.customer || 'Cliente')}</strong><small>Pedido #${esc(String(order.id).slice(0,8))} · ${esc(fulfillmentLabel)} · ${esc(order.status)}</small>${last ? `<span class="conversation-preview">${last.from === 'merchant' ? 'Você: ' : ''}${esc(last.text)}</span>` : ''}</span>
+            <span class="conversation-meta"><b>${messages.length}</b><span>${open ? 'Fechar' : 'Abrir'}</span></span>
+          </button>
+          ${open ? `<div class="merchant-conversation-body"><div class="chat-messages compact">${messages.map((message) => `<div class="message ${message.from === 'merchant' ? 'mine' : ''}">${esc(message.text)}<small>${esc(message.time)}</small></div>`).join('')}</div><form class="chat-compose merchant-order-chat" data-order-chat="${esc(order.id)}"><input name="message" required maxlength="2000" placeholder="Responder ao cliente"><button type="submit">Enviar</button></form></div>` : ''}
+        </article>`;
+      }).join('') || empty('Nenhuma conversa ativa', 'As conversas aparecem aqui somente enquanto o pedido estiver ativo e houver mensagens do cliente.')}
     </section>
   `;
 }
@@ -1839,6 +1934,18 @@ function missingShop() {
   `;
 }
 
+async function loadAdminSupportContact(){
+  try{const r=await fetch('/api/support-contact',{headers: authenticatedUser ? {Authorization:`Bearer ${(await window.pedeiaSupabase.auth.getSession()).data?.session?.access_token||''}`} : {}});if(!r.ok)return adminSupportContact;const data=await r.json();adminSupportContact={name:String(data.name||''),phone:String(data.phone||'')};adminSupportContactLoaded=true;return adminSupportContact;}catch{return adminSupportContact;}
+}
+function whatsappDigits(phone){return String(phone||'').replace(/\D/g,'');}
+async function openAdminWhatsapp(){
+  const contact=await loadAdminSupportContact();
+  const digits=whatsappDigits(contact.phone);
+  if(!digits){notify('O administrador ainda não cadastrou o WhatsApp de atendimento.');return;}
+  const text=encodeURIComponent(`Olá${contact.name?` ${contact.name}`:''}, preciso de ajuda com a minha assinatura no PedeIA.`);
+  window.open(`https://wa.me/${digits}?text=${text}`,'_blank','noopener');
+}
+
 function subscriptionPendingView() {
   const status = shopSubscriptionStatus().replaceAll('-', '_').replaceAll(' ', '_');
   const expiresAt = verifiedSubscription?.fim_assinatura || state.shop?.subscriptionExpiresAt || state.shop?.subscription_expires_at;
@@ -1851,10 +1958,12 @@ function subscriptionPendingView() {
         <p class="eyebrow">${merchantLogged() ? 'ACESSO AO SISTEMA BLOQUEADO' : 'LOJA TEMPORARIAMENTE INDISPONÍVEL'}</p>
         <h1>${expired ? 'Assinatura expirada' : 'Assinatura pendente'}</h1>
         <p>${merchantLogged() ? (expired ? 'O período da sua assinatura expirou.' : 'Sua assinatura ainda está pendente.') + ' O acesso ao PedeIA está suspenso até a regularização da mensalidade. Entre em contato com o administrador para renovar o acesso.' : (expired ? 'O período da assinatura de' : 'A assinatura de') + ' <strong>' + esc(state.shop?.name || 'esta loja') + '</strong> ' + (expired ? 'expirou' : 'está pendente') + '. Para voltar a fazer pedidos, o responsável pela loja precisa renovar a assinatura.'}</p>
-        ${merchantLogged() ? '<button class="primary-button" data-action="open-support">Falar com o administrador</button><button class="secondary-button" data-action="logout">Sair</button>' : '<a class="primary-button" href="/">Entendi</a>'}
+        ${merchantLogged() ? '<button class="primary-button" data-action="open-admin-whatsapp">Falar com o administrador</button><button class="secondary-button" data-action="logout">Sair</button>' : '<a class="primary-button" href="/">Entendi</a>'}
       </section>
     </main>
   `;
+  document.querySelector('[data-action="open-admin-whatsapp"]')?.addEventListener('click',openAdminWhatsapp);
+  document.querySelector('[data-action="logout"]')?.addEventListener('click',()=>window.pedeiaSupabase.auth.signOut());
 }
 
 function subscriptionCheckingView() {
@@ -1883,9 +1992,34 @@ function subscriptionUnavailableView() {
     </main>
   `;
   document.querySelector('[data-action="retry-subscription"]')?.addEventListener('click', refreshShopSubscription);
-  document.querySelector('[data-action="open-support"]')?.addEventListener('click',async()=>{state.view='support';try{await loadMerchantTickets();supportThread=merchantTickets[0]?.id||null;if(supportThread){const r=await supportRequest(`/api/support/${supportThread}/messages`);supportMessagesList=await Promise.all((r.mensagens||[]).map(async m=>({...m,signedUrl:await signedSupportUrl(m.anexo_url)})));}}catch(e){notify(e.message);}render();});
+  document.querySelector('[data-action="open-admin-whatsapp"]')?.addEventListener('click',openAdminWhatsapp);
   document.querySelector('[data-action="logout"]')?.addEventListener('click',()=>window.pedeiaSupabase.auth.signOut());
 }
+
+const TUTORIALS={
+  dashboard:[['Visão geral','Aqui você acompanha os principais números da sua loja.'],['Pedidos ativos','O contador mostra somente pedidos que ainda estão em andamento.'],['Menu lateral','Use o menu para acessar pedidos, histórico, entregadores, conversas, suporte e configurações.']],
+  orders:[['Pedidos','Esta é a central para acompanhar os pedidos recebidos.'],['Status','Use os botões do pedido para avançar o preparo e a entrega.'],['Atualização automática','Novos pedidos e mudanças de status chegam automaticamente depois do login.']],
+  history:[['Histórico','Aqui ficam os pedidos já encerrados, separados dos pedidos ativos.'],['Filtros','Use período, delivery/retirada e busca para encontrar pedidos antigos.']],
+  couriers:[['Entregadores','Cadastre cada entregador uma única vez e compartilhe o link individual.'],['Localização','Quando o entregador compartilhar GPS, a posição poderá aparecer no mapa de localização.'],['Link individual','Use “Copiar link” para enviar novamente o acesso do entregador.']],
+  chat:[['Conversas','Aqui aparecem apenas conversas ligadas a pedidos que ainda estão ativos.'],['Abrir conversa','Clique no pedido para abrir a conversa e responder ao cliente.']],
+  support:[['Suporte','Use esta área para falar diretamente com o administrador.'],['Iniciar conversa','Abra um novo chamado somente quando precisar de atendimento.'],['Anexos','Você pode enviar imagens e PDFs junto da mensagem.']],
+  printers:[['Impressoras','Cadastre e teste suas impressoras térmicas nesta área.'],['Teste','Use o teste antes de ativar a impressão automática dos pedidos.']],
+  menu:[['Cardápio','Cadastre e organize seus produtos e suas opções.'],['Adicionais','Os adicionais podem ser configurados com quantidade máxima e preço por unidade.']],
+  categories:[['Categorias','Organize os produtos da loja por categorias.']],
+  settings:[['Minha loja','Configure os dados, horários e aparência básica da loja.']]
+};
+function tutorialKey(view){return `${state.merchant?.authUserId||authenticatedUser?.id||'merchant'}:${view}`;}
+function tutorialSeen(view){try{return localStorage.getItem(`pedeia-tutorial-seen:${tutorialKey(view)}`)==='1';}catch{return false;}}
+function setTutorialSeen(view){try{localStorage.setItem(`pedeia-tutorial-seen:${tutorialKey(view)}`,'1');}catch{}}
+function tutorialTarget(view,step){const map={dashboard:['.main-content .page-intro','.main-content .stats-grid','.side-nav'],orders:['.order-board','.order-board','.side-nav'],history:['.order-history-list','.history-period-bar'],couriers:['.courier-list','.courier-list','.courier-actions'],chat:['.merchant-conversations','.merchant-conversations'],support:['.support-layout','.support-new-form','.support-list'],printers:['.printer-row','.settings-grid'],menu:['.menu-grid','.menu-grid'],categories:['.category-grid','.category-grid'],settings:['.settings-grid']};return map[view]?.[step]||'.main-content';}
+function closeTutorial(){document.querySelector('.pedeia-tutorial-overlay')?.remove();tutorialOverlayOpen=false;document.body.classList.remove('tutorial-lock');}
+function showTutorial(view=state.view,force=false){const steps=TUTORIALS[view]||[['PedeIA','Este robô explica os recursos desta tela.']];if(!force&&tutorialSeen(view))return;closeTutorial();tutorialState={view,step:0};tutorialOverlayOpen=true;document.body.classList.add('tutorial-lock');
+  const overlay=document.createElement('div');overlay.className='pedeia-tutorial-overlay';overlay.innerHTML=`<div class="pedeia-tutorial-backdrop"></div><section class="pedeia-tutorial-card" role="dialog" aria-modal="true"><div class="pedeia-tutorial-robot">🤖</div><div class="pedeia-tutorial-content"><span class="pedeia-tutorial-kicker">TUTORIAL DA TELA</span><h2></h2><p></p><div class="pedeia-tutorial-progress"></div><div class="pedeia-tutorial-actions"><button type="button" class="secondary-button" data-tutorial-skip>Pular</button><button type="button" class="primary-button" data-tutorial-next>Próximo</button></div></div></section>`;document.body.appendChild(overlay);
+  const renderStep=()=>{const step=steps[tutorialState.step];overlay.querySelector('h2').textContent=step[0];overlay.querySelector('p').textContent=step[1];overlay.querySelector('.pedeia-tutorial-progress').textContent=`${tutorialState.step+1} de ${steps.length}`;overlay.querySelector('[data-tutorial-next]').textContent=tutorialState.step===steps.length-1?'Concluir':'Próximo';document.querySelectorAll('.pedeia-tutorial-highlight').forEach(e=>e.classList.remove('pedeia-tutorial-highlight'));const target=document.querySelector(tutorialTarget(view,tutorialState.step));if(target)target.classList.add('pedeia-tutorial-highlight');};
+  overlay.querySelector('[data-tutorial-skip]').onclick=()=>{setTutorialSeen(view);closeTutorial();};overlay.querySelector('[data-tutorial-next]').onclick=()=>{if(tutorialState.step>=steps.length-1){setTutorialSeen(view);closeTutorial();}else{tutorialState.step++;renderStep();}};overlay.querySelector('.pedeia-tutorial-backdrop').onclick=()=>{};renderStep();
+}
+function mountTutorialRobot(){if(!merchantLogged()||isAdmin)return;document.querySelector('.pedeia-tutorial-robot-fab')?.remove();const fab=document.createElement('button');fab.className='pedeia-tutorial-robot-fab';fab.type='button';fab.title='Abrir tutorial desta tela';fab.setAttribute('aria-label','Abrir tutorial desta tela');fab.innerHTML='🤖<span data-tutorial-hide title="Ocultar robô até entrar novamente no site">×</span>';if(tutorialRobotHidden)return;document.body.appendChild(fab);let dragging=false,moved=false,startX=0,startY=0,left=0,top=0;const onDown=e=>{dragging=true;moved=false;const p=e.touches?.[0]||e;const r=fab.getBoundingClientRect();left=r.left;top=r.top;startX=p.clientX;startY=p.clientY;fab.setPointerCapture?.(e.pointerId);};const onMove=e=>{if(!dragging)return;const p=e.touches?.[0]||e;const dx=p.clientX-startX,dy=p.clientY-startY;if(Math.abs(dx)+Math.abs(dy)>6)moved=true;fab.style.left=`${Math.max(4,Math.min(window.innerWidth-64,left+dx))}px`;fab.style.top=`${Math.max(4,Math.min(window.innerHeight-64,top+dy))}px`;fab.style.right='auto';};const onUp=()=>{dragging=false;};fab.addEventListener('pointerdown',onDown);fab.addEventListener('pointermove',onMove);fab.addEventListener('pointerup',onUp);fab.addEventListener('click',e=>{if(moved){e.preventDefault();return;}showTutorial(state.view,true);});fab.querySelector('[data-tutorial-hide]').addEventListener('click',e=>{e.stopPropagation();tutorialRobotHidden=true;fab.remove();notify('Robô ocultado até você entrar novamente no site.');});}
+function initTutorialForView(){if(!merchantLogged()||isAdmin)return;mountTutorialRobot();setTimeout(()=>{if(!tutorialSeen(state.view))showTutorial(state.view,false);},250);}
 
 function bindMerchant() {
   const menuToggle = document.querySelector('.mobile-menu-toggle');
@@ -1990,13 +2124,45 @@ function bindMerchant() {
     };
   });
 
+  document.querySelectorAll('[data-chat-filter]').forEach((button) => {
+    button.onclick = () => {
+      state.chatFilter = button.dataset.chatFilter || 'all';
+      merchantChatOpenId = null;
+      save();
+      renderSaved();
+    };
+  });
+
+  document.querySelector('[data-chat-status-filter]')?.addEventListener('change', (event) => {
+    state.chatStatusFilter = event.target.value || 'all';
+    merchantChatOpenId = null;
+    save();
+    renderSaved();
+  });
+
+  document.querySelectorAll('[data-chat-open]').forEach((button) => {
+    button.onclick = () => {
+      const id = String(button.dataset.chatOpen || '');
+      merchantChatOpenId = String(merchantChatOpenId || '') === id ? null : id;
+      renderSaved();
+    };
+  });
+
+  document.querySelectorAll('[data-history-period]').forEach((button) => {
+    button.onclick = () => {
+      state.historyPeriod = button.dataset.historyPeriod || 'all';
+      save();
+      renderSaved();
+    };
+  });
+
   document.querySelector('[data-order-search]')?.addEventListener('input', (event) => {
     state.orderQuery = event.target.value;
     save();
     const board = document.querySelector('.order-board');
     if (board) board.outerHTML = orderBoardResults(filteredOrders());
     const historyList = document.querySelector('.order-history-list');
-    if (historyList) historyList.innerHTML = filteredOrders().filter(isArchivedOrder).map((order) => orderCard(order, true)).join('') || empty('Histórico vazio', 'Os pedidos entregues serão arquivados após o fechamento da loja.');
+    if (historyList) historyList.innerHTML = historyOrders().map((order) => orderCard(order, true)).join('') || empty('Histórico vazio', 'Não há pedidos concluídos ou cancelados no período selecionado.');
     document.querySelectorAll('.order-board [data-action], .order-history-list [data-action]').forEach((button) => {
       button.onclick = handleAction;
     });
@@ -2032,6 +2198,7 @@ function handleAction(event) {
   const button = event.currentTarget;
   const action = button.dataset.action;
 
+  if (action === 'open-admin-whatsapp') return openAdminWhatsapp();
   if (action === 'new-category') return categoryDialog();
   if (action === 'new-product' || action === 'edit-product') return productDialog(button.dataset.id);
   if (action === 'remove-category') {

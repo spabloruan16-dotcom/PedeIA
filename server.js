@@ -538,6 +538,26 @@ http.createServer((request, response) => {
     return;
   }
 
+  if (pathname === "/api/support-contact" && request.method === "GET") {
+    (async()=>{
+      const user=await authenticatedUser(request); if(!user)return respondJson(response,401,{error:"Sessao invalida"});
+      if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});
+      const r=await subscriptionPool.query("SELECT name,phone FROM public.pedeia_admin_contact WHERE id=1 LIMIT 1");
+      return respondJson(response,200,{name:r.rows[0]?.name||"",phone:r.rows[0]?.phone||""});
+    })().catch(e=>{console.error(e);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel carregar o contato"});}); return;
+  }
+  if (pathname === "/api/admin/support-contact" && ["GET","PATCH"].includes(request.method)) {
+    (async()=>{
+      const auth=await requireAdmin(request); if(auth.error)return respondJson(response,auth.status,{error:auth.error});
+      if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});
+      if(request.method==="GET") { const r=await subscriptionPool.query("SELECT name,phone FROM public.pedeia_admin_contact WHERE id=1 LIMIT 1"); return respondJson(response,200,{name:r.rows[0]?.name||"",phone:r.rows[0]?.phone||""}); }
+      const b=await readRequestJson(request), name=String(b.name||"").trim().slice(0,100), phone=String(b.phone||"").replace(/[^0-9+]/g,"").slice(0,30);
+      if(phone.replace(/\D/g,"").length<10)return respondJson(response,400,{error:"Informe um número de WhatsApp válido com DDD."});
+      const r=await subscriptionPool.query(`INSERT INTO public.pedeia_admin_contact(id,name,phone,updated_at) VALUES(1,$1,$2,NOW()) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,phone=EXCLUDED.phone,updated_at=NOW() RETURNING name,phone`,[name,phone]);
+      return respondJson(response,200,{ok:true,name:r.rows[0].name,phone:r.rows[0].phone});
+    })().catch(e=>{console.error(e);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel salvar o contato"});}); return;
+  }
+
   if (pathname === "/api/admin/merchants" || /^\/api\/admin\/merchants\/[0-9a-f-]+\/subscription$/i.test(pathname)) {
     (async () => {
       const auth = await requireAdmin(request);
@@ -716,7 +736,9 @@ http.createServer((request, response) => {
           `SELECT m.id,m.pedido_id,m.remetente_tipo,m.conteudo,m.created_at
            FROM public.mensagens_pedidos m
            JOIN public.pedidos p ON p.id=m.pedido_id
-           WHERE p.loja_id=$1 ${orderClause}
+           WHERE p.loja_id=$1
+             AND p.status NOT IN ('Entregue','Finalizado','Cancelado','Cancelada')
+             ${orderClause}
            ORDER BY m.created_at ASC LIMIT 1000`,
           values
         );
@@ -731,11 +753,13 @@ http.createServer((request, response) => {
       if (!content || content.length > 2000) return respondJson(response, 400, { error: "A mensagem deve ter entre 1 e 2000 caracteres" });
       const inserted = await subscriptionPool.query(
         `INSERT INTO public.mensagens_pedidos(pedido_id,remetente_tipo,conteudo)
-         SELECT p.id,'comerciante',$3 FROM public.pedidos p WHERE p.id=$1 AND p.loja_id=$2
+         SELECT p.id,'comerciante',$3 FROM public.pedidos p
+         WHERE p.id=$1 AND p.loja_id=$2
+           AND p.status NOT IN ('Entregue','Finalizado','Cancelado','Cancelada')
          RETURNING id,pedido_id,remetente_tipo,conteudo,created_at`,
         [orderId, shop.rows[0].id, content]
       );
-      if (!inserted.rowCount) return respondJson(response, 404, { error: "Pedido nao encontrado para esta loja" });
+      if (!inserted.rowCount) return respondJson(response, 409, { error: "A conversa deste pedido foi encerrada porque o pedido nao esta mais ativo" });
       return respondJson(response, 201, { mensagem: inserted.rows[0] });
     })().catch((error) => {
       console.error("Falha nas conversas do comerciante:", error.message);
@@ -809,8 +833,17 @@ http.createServer((request, response) => {
         const nome = String(body.nome || "").trim().slice(0,120), telefone=String(body.telefone||"").trim().slice(0,40), veiculo=String(body.veiculo||"").trim().slice(0,80);
         if (!nome) return respondJson(response,400,{error:"Informe o nome do entregador"});
         const token=crypto.randomBytes(32).toString("base64url"), tokenHash=crypto.createHash("sha256").update(token).digest("hex");
-        const inserted=await subscriptionPool.query(`INSERT INTO public.entregadores(loja_id,nome,telefone,veiculo,token_hash) VALUES($1,$2,$3,$4,$5) RETURNING id,nome,telefone,veiculo,ativo,created_at`,[shopId,nome,telefone,veiculo,tokenHash]);
+        const inserted=await subscriptionPool.query(`INSERT INTO public.entregadores(loja_id,nome,telefone,veiculo,token_hash,token_value) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,nome,telefone,veiculo,ativo,created_at`,[shopId,nome,telefone,veiculo,tokenHash,token]);
         return respondJson(response,201,{entregador:inserted.rows[0],token});
+      }
+      const linkMatch=pathname.match(/^\/api\/merchant\/couriers\/([0-9a-f-]{36})\/link$/i);
+      if(linkMatch && request.method==="POST"){
+        let r=await subscriptionPool.query("SELECT id,ativo,token_value FROM public.entregadores WHERE id=$1 AND loja_id=$2",[linkMatch[1],shopId]);
+        if(!r.rowCount)return respondJson(response,404,{error:"Entregador nao encontrado"});
+        if(!r.rows[0].ativo)return respondJson(response,400,{error:"Ative o entregador antes de copiar o link."});
+        let token=r.rows[0].token_value;
+        if(!token){token=crypto.randomBytes(32).toString("base64url");const tokenHash=crypto.createHash("sha256").update(token).digest("hex");await subscriptionPool.query("UPDATE public.entregadores SET token_hash=$2,token_value=$3,updated_at=NOW() WHERE id=$1",[linkMatch[1],tokenHash,token]);}
+        return respondJson(response,200,{link:`${String(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,'')||`http://${request.headers.host}`}/motoboy?token=${encodeURIComponent(token)}`});
       }
       if (routeMatch && request.method === "PATCH") {
         const body=await readRequestJson(request), ativo=body.ativo===true;
