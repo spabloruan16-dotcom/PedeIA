@@ -43,3 +43,13 @@ Configure pelo menos:
 ## Observação
 
 As novas rotas de relatórios, promoções, localização e otimização ficam protegidas pela sessão autenticada do comerciante.
+
+
+## Instalação desta versão consolidada
+
+Execute **somente `SUPABASE-CONSOLIDADO-FINAL.sql`** no Supabase. Os arquivos SQL marcados como LEGADO são apenas referência histórica e não devem ser executados isoladamente.
+
+### Variáveis do Render
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `ORS_API_KEY` (necessária para otimização ORS; sem ela o sistema ainda geocodifica e preserva a ordem original)
