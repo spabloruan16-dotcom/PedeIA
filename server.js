@@ -734,13 +734,13 @@ http.createServer((request, response) => {
             }
           }
           candidates.sort((a,b)=>b.d-a.d); if(candidates[0]){discount=candidates[0].d;appliedPromotion=candidates[0].promo;}
-          if(appliedPromotion) await client.query('UPDATE public.promocoes SET usos=COALESCE(usos,0)+1,atualizada_em=NOW() WHERE id=$1',[appliedPromotion.id]);
         } catch(promoError) { if(!/relation .*promocoes.*does not exist/i.test(String(promoError.message))) throw promoError; }
-        const total=subtotal+fee-discount;
+        const total=Math.max(0,subtotal+fee-discount);
         const status="Aguardando",eta=new Date(Date.now()+Math.max(10,Number(fulfillment==="delivery"?shop.tempo_entrega:shop.tempo_retirada)||30)*60000);
         trackingToken=crypto.randomBytes(32).toString("base64url");const tokenHash=crypto.createHash("sha256").update(trackingToken).digest("hex");
         const deliveryPoint=fulfillment==="delivery"&&address?await geocodeAddress(addressFromParts(addressParts,address)):null;
-        const inserted=await client.query(`INSERT INTO public.pedidos(loja_id,cliente_id,tipo_entrega,endereco,endereco_partes,latitude_entrega,longitude_entrega,pagamento,observacoes,total,taxa_entrega,desconto,status,previsao_entrega,public_token_hash) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id,created_at,latitude_entrega,longitude_entrega`,[shop.id,customerId,fulfillment,address||null,addressParts,deliveryPoint?.latitude??null,deliveryPoint?.longitude??null,payment,String(body.observacoes||"").slice(0,1000),total,fee,discount,status,eta,tokenHash]);orderId=inserted.rows[0].id;
+        const inserted=await client.query(`INSERT INTO public.pedidos(loja_id,cliente_id,tipo_entrega,endereco,endereco_partes,latitude_entrega,longitude_entrega,pagamento,observacoes,total,taxa_entrega,desconto,codigo_cupom,status,previsao_entrega,public_token_hash) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id,created_at,latitude_entrega,longitude_entrega`,[shop.id,customerId,fulfillment,address||null,addressParts,deliveryPoint?.latitude??null,deliveryPoint?.longitude??null,payment,String(body.observacoes||"").slice(0,1000),total,fee,discount,appliedPromotion?.id||null,status,eta,tokenHash]);orderId=inserted.rows[0].id;
+        if(appliedPromotion) await client.query('UPDATE public.promocoes SET usos=COALESCE(usos,0)+1,atualizada_em=NOW() WHERE id=$1',[appliedPromotion.id]);
         for(const item of verified){await client.query(`INSERT INTO public.itens_do_pedido(pedido_id,produto_id,produto_nome,produto_descricao,quantidade,preco_unitario,observacao,personalizacoes,preco_total) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)`,[orderId,item.product.id,item.product.nome,item.product.descricao||"",item.qty,item.unit,item.notes||null,JSON.stringify(item.selections),item.lineTotal]);}
         await client.query("COMMIT");return respondJson(response,201,{pedido:{id:orderId,status,total,taxa_entrega:fee,created_at:inserted.rows[0].created_at,previsao_entrega:eta},tracking_token:trackingToken});
       }catch(e){await client.query("ROLLBACK");return respondJson(response,e.statusCode||400,{error:e.message||"Nao foi possivel registrar o pedido"});}finally{client.release();}
@@ -892,6 +892,20 @@ http.createServer((request, response) => {
   }
 
 
+  if (pathname === '/api/merchant/promotion-options' && request.method === 'GET') {
+    (async()=>{
+      if(!subscriptionPool)return respondJson(response,503,{error:'Banco indisponivel'});
+      const user=await authenticatedUser(request);if(!user)return respondJson(response,401,{error:'Sessao invalida'});
+      const shop=await subscriptionPool.query('SELECT id FROM public.lojas WHERE merchant_id=$1 ORDER BY created_at LIMIT 1',[user.id]);if(!shop.rowCount)return respondJson(response,404,{error:'Loja nao encontrada'});
+      const [products,categories,couriers]=await Promise.all([
+        subscriptionPool.query('SELECT id,nome,preco,categoria_id FROM public.produtos WHERE loja_id=$1 AND disponivel=true ORDER BY nome',[shop.rows[0].id]),
+        subscriptionPool.query('SELECT id,nome FROM public.categorias WHERE loja_id=$1 ORDER BY ordem,nome',[shop.rows[0].id]),
+        subscriptionPool.query('SELECT id,nome FROM public.entregadores WHERE loja_id=$1 ORDER BY nome',[shop.rows[0].id])
+      ]);
+      return respondJson(response,200,{produtos:products.rows,categorias:categories.rows,entregadores:couriers.rows});
+    })().catch(e=>{console.error('Opcoes:',e);if(!response.headersSent)respondJson(response,500,{error:'Nao foi possivel carregar as opcoes'});});return;
+  }
+
   if (pathname === "/api/merchant/reports" && request.method === "GET") {
     (async()=>{
       if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});
@@ -901,7 +915,7 @@ http.createServer((request, response) => {
       const shopId=shop.rows[0].id, period=String(url.searchParams.get('period')||'30'), delivery=String(url.searchParams.get('delivery')||'all'), status=String(url.searchParams.get('status')||'all'), payment=String(url.searchParams.get('payment')||'all');
       let start=new Date();let end=new Date(); const now=new Date();
       if(period==='today'){start=new Date(now);start.setHours(0,0,0,0);} else if(period==='yesterday'){end=new Date(now);end.setHours(0,0,0,0);start=new Date(end);start.setDate(start.getDate()-1);} else if(['7','30','90'].includes(period)){start=new Date(now.getTime()-Number(period)*86400000);} else if(period==='month'){start=new Date(now.getFullYear(),now.getMonth(),1);} else if(period==='lastmonth'){start=new Date(now.getFullYear(),now.getMonth()-1,1);end=new Date(now.getFullYear(),now.getMonth(),1);} else if(period==='year'){start=new Date(now.getFullYear(),0,1);} else {start=new Date(now.getTime()-30*86400000);}
-      const clauses=['p.loja_id=$1','p.created_at >= $2','p.created_at < $3'];const params=[shopId,start,end];let n=4;if(delivery!=='all'){clauses.push(`p.tipo_entrega=$${n++}`);params.push(delivery);}if(status!=='all'){clauses.push(`p.status=$${n++}`);params.push(status);}if(payment!=='all'){clauses.push(`p.pagamento=$${n++}`);params.push(payment);}const where=clauses.join(' AND ');
+      const clauses=['p.loja_id=$1','p.created_at >= $2','p.created_at < $3'];const params=[shopId,start,end];let n=4;if(delivery!=='all'){clauses.push(`p.tipo_entrega=$${n++}`);params.push(delivery);}if(status!=='all'){clauses.push(`p.status=$${n++}`);params.push(status);}if(payment!=='all'){clauses.push(`p.pagamento=$${n++}`);params.push(payment);}const category=String(url.searchParams.get('category')||'all'),product=String(url.searchParams.get('product')||'all'),courier=String(url.searchParams.get('courier')||'all');if(category!=='all'){clauses.push(`EXISTS (SELECT 1 FROM public.itens_do_pedido ix JOIN public.produtos px ON px.id=ix.produto_id WHERE ix.pedido_id=p.id AND px.categoria_id=$${n++})`);params.push(category);}if(product!=='all'){clauses.push(`EXISTS (SELECT 1 FROM public.itens_do_pedido ix WHERE ix.pedido_id=p.id AND ix.produto_id=$${n++})`);params.push(product);}if(courier!=='all'){clauses.push(`p.entregador_id=$${n++}`);params.push(courier);}const where=clauses.join(' AND ');
       const rows=await subscriptionPool.query(`SELECT p.id,p.status,p.tipo_entrega,p.pagamento,p.total,p.desconto,p.created_at,COALESCE(SUM(i.quantidade),0)::int AS unidades FROM public.pedidos p LEFT JOIN public.itens_do_pedido i ON i.pedido_id=p.id WHERE ${where} GROUP BY p.id`,params);
       const data=rows.rows; const completed=data.filter(x=>!['Cancelado','Cancelada'].includes(x.status)); const revenue=completed.reduce((a,x)=>a+Number(x.total||0),0); const discounts=data.reduce((a,x)=>a+Number(x.desconto||0),0); const units=data.reduce((a,x)=>a+Number(x.unidades||0),0);
       const top=await subscriptionPool.query(`SELECT i.produto_nome AS nome,SUM(i.quantidade)::int AS quantidade,SUM(COALESCE(i.preco_total,i.preco_unitario*i.quantidade))::numeric(12,2) AS faturamento FROM public.itens_do_pedido i JOIN public.pedidos p ON p.id=i.pedido_id WHERE ${where} AND p.status NOT IN ('Cancelado','Cancelada') GROUP BY i.produto_nome ORDER BY quantidade DESC,faturamento DESC LIMIT 10`,params);
