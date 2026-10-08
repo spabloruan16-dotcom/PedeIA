@@ -992,14 +992,38 @@ function promotionsView(){
  <section class="promo-list">${rows.map(x=>`<article class="panel promo-card"><div><strong>${esc(x.nome)}</strong><small>${esc(x.tipo)} · ${esc(x.escopo)} · ${new Date(x.inicio).toLocaleString('pt-BR')} ${x.fim?'até '+new Date(x.fim).toLocaleString('pt-BR'):''}</small><p>${x.ativa?'Ativa':'Pausada'} · ${x.usos||0}${x.limite_total?' / '+x.limite_total:''} uso(s)</p></div><div><strong>${x.tipo==='percentual'?Number(x.valor).toLocaleString('pt-BR')+'%':reportMoney(x.valor)}</strong><button class="secondary-button" data-promo-toggle="${x.id}" data-active="${x.ativa?'true':'false'}">${x.ativa?'Pausar':'Ativar'}</button><button class="secondary-button" data-promo-delete="${x.id}">Excluir</button></div></article>`).join('')||'<div class="panel"><p>Nenhuma promoção cadastrada.</p></div>'}</section>`;
 }
 function courierMapView(){
- return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA EM TEMPO REAL</p><h1>Localizar entregadores</h1><p class="intro-copy">Veja no mapa os entregadores ativos que compartilharam a localização.</p></div><button class="secondary-button" data-courier-locations-refresh>Atualizar</button></section><section class="panel courier-map-layout"><div id="courier-map" class="courier-map"></div><aside class="courier-location-list">${courierLocations.map(c=>`<article><span class="courier-dot" style="background:hsl(${Number(c.hue||0)} 70% 45%)"></span><div><strong>${esc(c.nome)}</strong><small>${esc(c.telefone||'Sem telefone')} · ${c.pedidos_ativos||0} pedido(s)</small><small>${c.localizacao_atualizada_em?new Date(c.localizacao_atualizada_em).toLocaleTimeString('pt-BR'):'Sem GPS recente'}</small></div></article>`).join('')||'<p class="muted">Nenhum entregador com GPS recente.</p>'}</aside></section>`;
+ const withGps=courierLocations.filter(c=>Number.isFinite(Number(c.ultima_latitude))&&Number.isFinite(Number(c.ultima_longitude)));
+ return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA EM TEMPO REAL</p><h1>Localizar entregadores</h1><p class="intro-copy">Veja no mapa os entregadores ativos, a cor de cada um, seus pedidos e a última localização recebida.</p></div><div class="courier-actions"><span class="courier-gps-summary">${withGps.length} com GPS · ${courierLocations.length} ativo(s)</span><button class="secondary-button" data-courier-locations-refresh>Atualizar</button></div></section><section class="panel courier-map-layout"><div class="courier-map-wrap"><div id="courier-map" class="courier-map"></div><div class="courier-map-help">Clique em um marcador para ver os dados do entregador. O mapa atualiza quando você usa <strong>Atualizar</strong>.</div></div><aside class="courier-location-list">${courierLocations.map(c=>{const hasGps=Number.isFinite(Number(c.ultima_latitude))&&Number.isFinite(Number(c.ultima_longitude));return `<button type="button" class="courier-location-card" data-courier-focus="${esc(c.id)}"><span class="courier-dot" style="background:hsl(${Number(c.hue||0)} 70% 45%)"></span><div><strong>${esc(c.nome)}</strong><small>${esc(c.telefone||'Sem telefone')}</small><small><b>${Number(c.pedidos_ativos||0)}</b> pedido(s) ativo(s) · ${hasGps?'GPS ativo':'Sem GPS recente'}</small><small>${c.localizacao_atualizada_em?'Atualizado '+new Date(c.localizacao_atualizada_em).toLocaleTimeString('pt-BR'):'Localização ainda não compartilhada'}</small></div></button>`;}).join('')||'<p class="muted">Nenhum entregador ativo cadastrado.</p>'}</aside></section>`;
 }
 async function loadReportOptions(){if(reportOptionsLoaded)return;try{reportOptions=await merchantRequest('/api/merchant/promotion-options');reportOptionsLoaded=true;}catch(e){notify(e.message)}}
 async function loadReports(){await loadReportOptions();reportLoading=true;renderSaved();try{const q=new URLSearchParams({period:reportFilters.period,delivery:reportFilters.delivery,status:reportFilters.status,payment:reportFilters.payment,category:reportFilters.category,product:reportFilters.product,courier:reportFilters.courier});const r=await merchantRequest(`/api/merchant/reports?${q}`);reportData=r;}catch(e){notify(e.message)}finally{reportLoading=false;if(state.view==='reports')renderSaved();}}
 async function loadPromotions(){await loadReportOptions();try{const r=await merchantRequest('/api/merchant/promotions');promoRows=r.promocoes||[];promoLoaded=true;}catch(e){notify(e.message)}}
 async function loadCourierLocations(){courierLocationsLoading=true;try{const r=await merchantRequest('/api/merchant/couriers/locations');courierLocations=r.entregadores||[];}catch(e){notify(e.message)}finally{courierLocationsLoading=false;if(state.view==='courierMap')renderSaved();}}
-function initCourierMap(){const el=document.querySelector('#courier-map');if(!el||!window.L)return;const map=L.map(el).setView(courierLocations[0]?[Number(courierLocations[0].ultima_latitude),Number(courierLocations[0].ultima_longitude)]:[-8.28,-35.75],13);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);courierLocations.forEach(c=>{if(c.ultima_latitude==null)return;L.circleMarker([Number(c.ultima_latitude),Number(c.ultima_longitude)],{radius:9,fillOpacity:.85,color:'#fff',weight:2,fillColor:`hsl(${Number(c.hue||0)} 70% 45%)`}).addTo(map).bindPopup(`<strong>${esc(c.nome)}</strong><br>${Number(c.pedidos_ativos||0)} pedido(s) ativo(s)`);});}
-
+let courierLeafletMap=null;
+let courierLeafletMarkers=new Map();
+function initCourierMap(attempt=0){
+ const el=document.querySelector('#courier-map'); if(!el)return;
+ if(!window.L){if(attempt<40)setTimeout(()=>initCourierMap(attempt+1),150);return;}
+ try{
+  if(courierLeafletMap){courierLeafletMap.remove();courierLeafletMap=null;}
+  courierLeafletMarkers=new Map();
+  const gps=courierLocations.filter(c=>Number.isFinite(Number(c.ultima_latitude))&&Number.isFinite(Number(c.ultima_longitude)));
+  const center=gps.length?[Number(gps[0].ultima_latitude),Number(gps[0].ultima_longitude)]:[-8.28,-35.75];
+  courierLeafletMap=L.map(el,{zoomControl:true}).setView(center,gps.length===1?15:13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(courierLeafletMap);
+  const bounds=[];
+  courierLocations.forEach(c=>{
+   if(!Number.isFinite(Number(c.ultima_latitude))||!Number.isFinite(Number(c.ultima_longitude)))return;
+   const lat=Number(c.ultima_latitude),lon=Number(c.ultima_longitude),hue=Number(c.hue||0);
+   const marker=L.circleMarker([lat,lon],{radius:10,fillOpacity:.9,color:'#fff',weight:3,fillColor:`hsl(${hue} 70% 45%)`}).addTo(courierLeafletMap);
+   marker.bindPopup(`<div class="courier-popup"><strong>${esc(c.nome)}</strong><br><span>${esc(c.telefone||'Sem telefone')}</span><br><b>${Number(c.pedidos_ativos||0)} pedido(s) ativo(s)</b><br><small>${c.localizacao_atualizada_em?'Atualizado '+new Date(c.localizacao_atualizada_em).toLocaleString('pt-BR'):'Sem atualização'}</small></div>`);
+   courierLeafletMarkers.set(String(c.id),marker); bounds.push([lat,lon]);
+  });
+  if(bounds.length>1)courierLeafletMap.fitBounds(bounds,{padding:[35,35],maxZoom:16});
+  setTimeout(()=>courierLeafletMap?.invalidateSize(),100);
+  document.querySelectorAll('[data-courier-focus]').forEach(card=>card.addEventListener('click',()=>{const marker=courierLeafletMarkers.get(String(card.dataset.courierFocus));if(marker){courierLeafletMap.setView(marker.getLatLng(),16,{animate:true});marker.openPopup();}}));
+ }catch(e){console.error('Falha ao montar mapa de entregadores:',e);notify('Não foi possível carregar o mapa. Atualize a página e tente novamente.');}
+}
 function merchantPanel() {
   const page = state.view;
   const revenue = state.orders.filter((order) => order.createdAt && order.createdAt > Date.now() - 86400000).reduce((sum, order) => sum + Number(order.total || 0), 0);

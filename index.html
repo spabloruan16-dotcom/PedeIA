@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="/css/06.css">
   <link rel="stylesheet" href="/css/07.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 </head>
 <body>
   <div id="app"></div>
@@ -28,11 +29,6 @@
 
     // Create one client and expose the name expected by the existing app.js.
     window.pedeiaSupabase = createClient(supabaseUrl, supabasePublishableKey);
-
-    const leafletScript = document.createElement("script");
-    leafletScript.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-    leafletScript.crossOrigin = "";
-    document.head.appendChild(leafletScript);
 
     const appScript = document.createElement("script");
     appScript.src = "/app.js";
