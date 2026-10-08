@@ -14,11 +14,15 @@ ALTER TABLE public.entregadores
 -- 2) Contato de WhatsApp do administrador.
 CREATE TABLE IF NOT EXISTS public.pedeia_admin_contact (
   id SMALLINT PRIMARY KEY DEFAULT 1,
-  name VARCHAR(100) NOT NULL DEFAULT '',
-  phone VARCHAR(30) NOT NULL DEFAULT '',
+  name VARCHAR(100),
+  phone VARCHAR(30),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT pedeia_admin_contact_singleton CHECK (id = 1)
 );
+
+ALTER TABLE public.pedeia_admin_contact ADD COLUMN IF NOT EXISTS name VARCHAR(100);
+ALTER TABLE public.pedeia_admin_contact ADD COLUMN IF NOT EXISTS phone VARCHAR(30);
+ALTER TABLE public.pedeia_admin_contact ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 INSERT INTO public.pedeia_admin_contact (id, name, phone)
 VALUES (1, '', '')

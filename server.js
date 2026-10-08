@@ -16,6 +16,66 @@ const subscriptionPool = process.env.DATABASE_URL ? new Pool({
 }) : null;
 const supabaseUrl = process.env.SUPABASE_URL || "https://irlarzynvelqvihoxtpj.supabase.co";
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "sb_publishable_Zm5dduva-m9IenkcqW509Q_t7tBm6Zj";
+
+const geocodeCache = new Map();
+let lastNominatimRequestAt = 0;
+
+function normalizeAddressText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function addressFromParts(parts = {}, fallback = '') {
+  const values = [parts.street, parts.rua, parts.address, parts.number ? `nº ${parts.number}` : '', parts.complement, parts.neighborhood, parts.bairro, parts.city, parts.cidade, parts.state, parts.estado, parts.zip, parts.cep]
+    .map(normalizeAddressText).filter(Boolean);
+  return normalizeAddressText(values.join(', ') || fallback);
+}
+
+async function geocodeAddress(address) {
+  const text = normalizeAddressText(address);
+  if (!text) return null;
+  const cacheKey = text.toLowerCase();
+  if (geocodeCache.has(cacheKey)) return geocodeCache.get(cacheKey);
+
+  const key = process.env.ORS_API_KEY;
+  try {
+    if (key) {
+      const url = `https://api.openrouteservice.org/geocode/search?api_key=${encodeURIComponent(key)}&text=${encodeURIComponent(text)}&boundary.country=BR&size=1`;
+      const r = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (r.ok) {
+        const data = await r.json();
+        const c = data.features?.[0]?.geometry?.coordinates;
+        if (Array.isArray(c) && Number.isFinite(Number(c[0])) && Number.isFinite(Number(c[1]))) {
+          const point = { latitude: Number(c[1]), longitude: Number(c[0]), provider: 'openrouteservice' };
+          geocodeCache.set(cacheKey, point);
+          return point;
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('Falha geocodificacao ORS:', error.message);
+  }
+
+  // Fallback gratuito para endereços brasileiros. O servidor respeita o intervalo mínimo recomendado.
+  try {
+    const wait = Math.max(0, 1100 - (Date.now() - lastNominatimRequestAt));
+    if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+    lastNominatimRequestAt = Date.now();
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&addressdetails=1&q=${encodeURIComponent(text)}`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'PedeIA/1.0 (geocodificacao de pedidos)', Accept: 'application/json' } });
+    if (!r.ok) return null;
+    const data = await r.json();
+    const first = data?.[0];
+    if (!first) return null;
+    const point = { latitude: Number(first.lat), longitude: Number(first.lon), provider: 'nominatim' };
+    if (!Number.isFinite(point.latitude) || !Number.isFinite(point.longitude)) return null;
+    geocodeCache.set(cacheKey, point);
+    return point;
+  } catch (error) {
+    console.warn('Falha geocodificacao Nominatim:', error.message);
+    return null;
+  }
+}
+
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -542,19 +602,22 @@ http.createServer((request, response) => {
     (async()=>{
       const user=await authenticatedUser(request); if(!user)return respondJson(response,401,{error:"Sessao invalida"});
       if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});
-      const r=await subscriptionPool.query("SELECT name,phone FROM public.pedeia_admin_contact WHERE id=1 LIMIT 1");
-      return respondJson(response,200,{name:r.rows[0]?.name||"",phone:r.rows[0]?.phone||""});
+      const r=await subscriptionPool.query("SELECT nome,whatsapp,ativo FROM public.pedeia_admin_contact WHERE ativo=true ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1");
+      return respondJson(response,200,{name:r.rows[0]?.nome||"",phone:r.rows[0]?.whatsapp||""});
     })().catch(e=>{console.error(e);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel carregar o contato"});}); return;
   }
   if (pathname === "/api/admin/support-contact" && ["GET","PATCH"].includes(request.method)) {
     (async()=>{
       const auth=await requireAdmin(request); if(auth.error)return respondJson(response,auth.status,{error:auth.error});
       if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});
-      if(request.method==="GET") { const r=await subscriptionPool.query("SELECT name,phone FROM public.pedeia_admin_contact WHERE id=1 LIMIT 1"); return respondJson(response,200,{name:r.rows[0]?.name||"",phone:r.rows[0]?.phone||""}); }
+      if(request.method==="GET") { const r=await subscriptionPool.query("SELECT nome,whatsapp,ativo FROM public.pedeia_admin_contact ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1"); return respondJson(response,200,{name:r.rows[0]?.nome||"",phone:r.rows[0]?.whatsapp||"",ativo:r.rows[0]?.ativo!==false}); }
       const b=await readRequestJson(request), name=String(b.name||"").trim().slice(0,100), phone=String(b.phone||"").replace(/[^0-9+]/g,"").slice(0,30);
       if(phone.replace(/\D/g,"").length<10)return respondJson(response,400,{error:"Informe um número de WhatsApp válido com DDD."});
-      const r=await subscriptionPool.query(`INSERT INTO public.pedeia_admin_contact(id,name,phone,updated_at) VALUES(1,$1,$2,NOW()) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,phone=EXCLUDED.phone,updated_at=NOW() RETURNING name,phone`,[name,phone]);
-      return respondJson(response,200,{ok:true,name:r.rows[0].name,phone:r.rows[0].phone});
+      const existing=await subscriptionPool.query("SELECT id FROM public.pedeia_admin_contact ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1");
+      let r;
+      if(existing.rowCount){ r=await subscriptionPool.query(`UPDATE public.pedeia_admin_contact SET nome=$1,whatsapp=$2,ativo=true,updated_at=NOW() WHERE id=$3 RETURNING nome,whatsapp,ativo`,[name,phone,existing.rows[0].id]); }
+      else { r=await subscriptionPool.query(`INSERT INTO public.pedeia_admin_contact(id,nome,whatsapp,ativo,created_at,updated_at) VALUES(gen_random_uuid(),$1,$2,true,NOW(),NOW()) RETURNING nome,whatsapp,ativo`,[name,phone]); }
+      return respondJson(response,200,{ok:true,name:r.rows[0].nome,phone:r.rows[0].whatsapp,ativo:r.rows[0].ativo});
     })().catch(e=>{console.error(e);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel salvar o contato"});}); return;
   }
 
@@ -639,7 +702,7 @@ http.createServer((request, response) => {
         for(const item of items){
           const productId=String(item.produto_id||"");const qty=Number(item.quantidade);
           if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(productId)||!Number.isInteger(qty)||qty<1||qty>50)throw Object.assign(new Error("Produto ou quantidade invalida"),{statusCode:400});
-          const pr=await client.query("SELECT id,nome,descricao,preco,disponivel,opcoes FROM public.produtos WHERE id=$1 AND loja_id=$2",[productId,shop.id]);
+          const pr=await client.query("SELECT id,nome,descricao,preco,disponivel,opcoes,categoria_id FROM public.produtos WHERE id=$1 AND loja_id=$2",[productId,shop.id]);
           if(!pr.rowCount||!pr.rows[0].disponivel)throw Object.assign(new Error("Um produto nao esta mais disponivel"),{statusCode:409});
           const product=pr.rows[0], selections=Array.isArray(item.personalizacoes)?item.personalizacoes:[];let unit=Number(product.preco);const accepted=[];
           const groups=Array.isArray(product.opcoes)?product.opcoes:[];
@@ -647,10 +710,37 @@ http.createServer((request, response) => {
           for(const group of groups){const selected=accepted.filter(x=>x.group===String(group.title||group.key)).length;const min=Number(group.min||0),max=Number(group.max||1);if(selected<min||selected>max)throw Object.assign(new Error(`Revise as opcoes de ${product.nome}`),{statusCode:400});}
           const lineTotal=unit*qty;subtotal+=lineTotal;verified.push({product,qty,unit,lineTotal,notes:String(item.observacao||"").trim().slice(0,500),selections:accepted});
         }
-        const fee=deliveryFee,discount=0,total=subtotal+fee-discount;
+        const fee=deliveryFee;
+        let discount=0, appliedPromotion=null;
+        try {
+          const promos=await client.query(`SELECT p.*,COALESCE(array_agg(DISTINCT pi.produto_id) FILTER(WHERE pi.produto_id IS NOT NULL),'{}') produto_ids,COALESCE(array_agg(DISTINCT pi.categoria_id) FILTER(WHERE pi.categoria_id IS NOT NULL),'{}') categoria_ids
+            FROM public.promocoes p LEFT JOIN public.promocoes_itens pi ON pi.promocao_id=p.id
+            WHERE p.loja_id=$1 AND p.ativa=true AND p.inicio<=NOW() AND (p.fim IS NULL OR p.fim>=NOW())
+              AND (p.limite_total IS NULL OR p.usos<p.limite_total) GROUP BY p.id ORDER BY p.criada_em DESC`,[shop.id]);
+          const candidates=[];
+          for(const promo of promos.rows){ let d=0;
+            for(const line of verified){ const pid=String(line.product.id), cid=String(line.product.categoria_id||''); const matches=promo.escopo==='loja' || (promo.escopo==='produto' && promo.produto_ids.map(String).includes(pid)) || (promo.escopo==='categoria' && promo.categoria_ids.map(String).includes(cid)); if(!matches) continue; const qty=Number(line.qty), unit=Number(line.unit);
+              if(promo.tipo==='percentual') d+=line.lineTotal*Math.min(100,Math.max(0,Number(promo.valor||0)))/100;
+              else if(promo.tipo==='valor_fixo') d+=Math.min(line.lineTotal,Math.max(0,Number(promo.valor||0))*qty);
+              else if(promo.tipo==='preco_promocional') d+=Math.max(0,unit-Math.max(0,Number(promo.valor||0)))*qty;
+              else if(promo.tipo==='compre_x_pague_y'){const x=Math.max(1,Number(promo.quantidade_x||0)),y=Math.min(x,Math.max(1,Number(promo.quantidade_y||0)));d+=Math.floor(qty/x)*Math.max(0,(x-y))*unit;}
+            }
+            if(d>0){
+              if(promo.limite_por_cliente){
+                const used=await client.query('SELECT COUNT(*)::int AS total FROM public.pedidos WHERE cliente_id=$1 AND codigo_cupom=$2',[customerId,String(promo.id)]);
+                if(Number(used.rows[0]?.total||0)>=Number(promo.limite_por_cliente)) continue;
+              }
+              candidates.push({promo,d:Math.min(d,subtotal)});
+            }
+          }
+          candidates.sort((a,b)=>b.d-a.d); if(candidates[0]){discount=candidates[0].d;appliedPromotion=candidates[0].promo;}
+          if(appliedPromotion) await client.query('UPDATE public.promocoes SET usos=COALESCE(usos,0)+1,atualizada_em=NOW() WHERE id=$1',[appliedPromotion.id]);
+        } catch(promoError) { if(!/relation .*promocoes.*does not exist/i.test(String(promoError.message))) throw promoError; }
+        const total=subtotal+fee-discount;
         const status="Aguardando",eta=new Date(Date.now()+Math.max(10,Number(fulfillment==="delivery"?shop.tempo_entrega:shop.tempo_retirada)||30)*60000);
         trackingToken=crypto.randomBytes(32).toString("base64url");const tokenHash=crypto.createHash("sha256").update(trackingToken).digest("hex");
-        const inserted=await client.query(`INSERT INTO public.pedidos(loja_id,cliente_id,tipo_entrega,endereco,endereco_partes,pagamento,observacoes,total,taxa_entrega,status,previsao_entrega,public_token_hash) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12) RETURNING id,created_at`,[shop.id,customerId,fulfillment,address||null,addressParts,payment,String(body.observacoes||"").slice(0,1000),total,fee,status,eta,tokenHash]);orderId=inserted.rows[0].id;
+        const deliveryPoint=fulfillment==="delivery"&&address?await geocodeAddress(addressFromParts(addressParts,address)):null;
+        const inserted=await client.query(`INSERT INTO public.pedidos(loja_id,cliente_id,tipo_entrega,endereco,endereco_partes,latitude_entrega,longitude_entrega,pagamento,observacoes,total,taxa_entrega,desconto,status,previsao_entrega,public_token_hash) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id,created_at,latitude_entrega,longitude_entrega`,[shop.id,customerId,fulfillment,address||null,addressParts,deliveryPoint?.latitude??null,deliveryPoint?.longitude??null,payment,String(body.observacoes||"").slice(0,1000),total,fee,discount,status,eta,tokenHash]);orderId=inserted.rows[0].id;
         for(const item of verified){await client.query(`INSERT INTO public.itens_do_pedido(pedido_id,produto_id,produto_nome,produto_descricao,quantidade,preco_unitario,observacao,personalizacoes,preco_total) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)`,[orderId,item.product.id,item.product.nome,item.product.descricao||"",item.qty,item.unit,item.notes||null,JSON.stringify(item.selections),item.lineTotal]);}
         await client.query("COMMIT");return respondJson(response,201,{pedido:{id:orderId,status,total,taxa_entrega:fee,created_at:inserted.rows[0].created_at,previsao_entrega:eta},tracking_token:trackingToken});
       }catch(e){await client.query("ROLLBACK");return respondJson(response,e.statusCode||400,{error:e.message||"Nao foi possivel registrar o pedido"});}finally{client.release();}
@@ -799,6 +889,81 @@ http.createServer((request, response) => {
       if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)||!allowed.includes(status))return respondJson(response,400,{error:"Pedido ou status invalido"});
       const client=await subscriptionPool.connect();try{await client.query("BEGIN");const r=await client.query("UPDATE public.pedidos SET status=$3,updated_at=NOW(),confirmado_em=CASE WHEN $4::text='Entregue' THEN NOW() ELSE confirmado_em END WHERE id=$1 AND loja_id=$2 RETURNING id,status,updated_at,entregador_id,taxa_entrega,endereco,tipo_entrega",[orderId,shopId,status,status]);if(!r.rowCount){await client.query("ROLLBACK");return respondJson(response,404,{error:"Pedido nao encontrado"});}const p=r.rows[0];if(status==='Entregue'&&p.tipo_entrega==='delivery'&&p.entregador_id){await client.query(`INSERT INTO public.historico_entregas(loja_id,pedido_id,entregador_id,taxa_recebida,endereco,concluida_em) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(pedido_id) DO NOTHING`,[shopId,p.id,p.entregador_id,Number(p.taxa_entrega||0),p.endereco]);}await client.query("COMMIT");return respondJson(response,200,{pedido:{id:p.id,status:p.status,updated_at:p.updated_at}});}catch(e){await client.query("ROLLBACK");throw e;}finally{client.release();}
     })().catch(e=>{console.error("Falha pedidos comerciante:",e.message);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel atualizar o pedido"});});return;
+  }
+
+
+  if (pathname === "/api/merchant/reports" && request.method === "GET") {
+    (async()=>{
+      if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});
+      const user=await authenticatedUser(request);if(!user)return respondJson(response,401,{error:"Sessao invalida"});
+      const merchant=await subscriptionPool.query("SELECT id,status_assinatura,fim_assinatura FROM public.comerciantes WHERE id=$1",[user.id]);if(!merchant.rowCount)return respondJson(response,403,{error:"Comerciante nao encontrado"});
+      const shop=await subscriptionPool.query("SELECT id FROM public.lojas WHERE merchant_id=$1 ORDER BY created_at LIMIT 1",[user.id]);if(!shop.rowCount)return respondJson(response,404,{error:"Loja nao encontrada"});
+      const shopId=shop.rows[0].id, period=String(url.searchParams.get('period')||'30'), delivery=String(url.searchParams.get('delivery')||'all'), status=String(url.searchParams.get('status')||'all'), payment=String(url.searchParams.get('payment')||'all');
+      let start=new Date();let end=new Date(); const now=new Date();
+      if(period==='today'){start=new Date(now);start.setHours(0,0,0,0);} else if(period==='yesterday'){end=new Date(now);end.setHours(0,0,0,0);start=new Date(end);start.setDate(start.getDate()-1);} else if(['7','30','90'].includes(period)){start=new Date(now.getTime()-Number(period)*86400000);} else if(period==='month'){start=new Date(now.getFullYear(),now.getMonth(),1);} else if(period==='lastmonth'){start=new Date(now.getFullYear(),now.getMonth()-1,1);end=new Date(now.getFullYear(),now.getMonth(),1);} else if(period==='year'){start=new Date(now.getFullYear(),0,1);} else {start=new Date(now.getTime()-30*86400000);}
+      const clauses=['p.loja_id=$1','p.created_at >= $2','p.created_at < $3'];const params=[shopId,start,end];let n=4;if(delivery!=='all'){clauses.push(`p.tipo_entrega=$${n++}`);params.push(delivery);}if(status!=='all'){clauses.push(`p.status=$${n++}`);params.push(status);}if(payment!=='all'){clauses.push(`p.pagamento=$${n++}`);params.push(payment);}const where=clauses.join(' AND ');
+      const rows=await subscriptionPool.query(`SELECT p.id,p.status,p.tipo_entrega,p.pagamento,p.total,p.desconto,p.created_at,COALESCE(SUM(i.quantidade),0)::int AS unidades FROM public.pedidos p LEFT JOIN public.itens_do_pedido i ON i.pedido_id=p.id WHERE ${where} GROUP BY p.id`,params);
+      const data=rows.rows; const completed=data.filter(x=>!['Cancelado','Cancelada'].includes(x.status)); const revenue=completed.reduce((a,x)=>a+Number(x.total||0),0); const discounts=data.reduce((a,x)=>a+Number(x.desconto||0),0); const units=data.reduce((a,x)=>a+Number(x.unidades||0),0);
+      const top=await subscriptionPool.query(`SELECT i.produto_nome AS nome,SUM(i.quantidade)::int AS quantidade,SUM(COALESCE(i.preco_total,i.preco_unitario*i.quantidade))::numeric(12,2) AS faturamento FROM public.itens_do_pedido i JOIN public.pedidos p ON p.id=i.pedido_id WHERE ${where} AND p.status NOT IN ('Cancelado','Cancelada') GROUP BY i.produto_nome ORDER BY quantidade DESC,faturamento DESC LIMIT 10`,params);
+      const pay=await subscriptionPool.query(`SELECT p.pagamento,COUNT(*)::int AS quantidade,SUM(p.total)::numeric(12,2) AS valor FROM public.pedidos p WHERE ${where} AND p.status NOT IN ('Cancelado','Cancelada') GROUP BY p.pagamento ORDER BY valor DESC`,params);
+      const dayMap={};for(const x of completed){const d=new Date(x.created_at);const k=d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});dayMap[k]=(dayMap[k]||0)+Number(x.total||0);}const daily=Object.entries(dayMap).map(([label,value])=>({label,value}));const maxDaily=Math.max(1,...daily.map(x=>x.value));const hours=Array.from({length:24},(_,h)=>({label:String(h).padStart(2,'0'),value:completed.filter(x=>new Date(x.created_at).getHours()===h).length}));const maxHour=Math.max(1,...hours.map(x=>x.value));
+      return respondJson(response,200,{kpis:{revenue,orders:data.length,averageTicket:completed.length?revenue/completed.length:0,units,cancellations:data.filter(x=>['Cancelado','Cancelada'].includes(x.status)).length,discounts},daily,maxDaily,hours,maxHour,topProducts:top.rows,payments:pay.rows,paymentMethods:pay.rows.map(x=>x.pagamento).filter(Boolean)});
+    })().catch(e=>{console.error('Relatorios:',e);if(!response.headersSent)respondJson(response,500,{error:'Nao foi possivel carregar os relatorios'});});return;
+  }
+
+  if (pathname.startsWith('/api/merchant/promotions')) {
+    (async()=>{
+      if(!subscriptionPool)return respondJson(response,503,{error:'Banco indisponivel'});const user=await authenticatedUser(request);if(!user)return respondJson(response,401,{error:'Sessao invalida'});const shop=await subscriptionPool.query('SELECT id FROM public.lojas WHERE merchant_id=$1 ORDER BY created_at LIMIT 1',[user.id]);if(!shop.rowCount)return respondJson(response,404,{error:'Loja nao encontrada'});const shopId=shop.rows[0].id;
+      if(pathname==='/api/merchant/promotions'&&request.method==='GET'){const r=await subscriptionPool.query('SELECT * FROM public.promocoes WHERE loja_id=$1 ORDER BY inicio DESC,criada_em DESC',[shopId]);return respondJson(response,200,{promocoes:r.rows});}
+      if(pathname==='/api/merchant/promotions'&&request.method==='POST'){const b=await readRequestJson(request);const tipos=['percentual','valor_fixo','preco_promocional','compre_x_pague_y'],escopos=['produto','categoria','loja'];if(!tipos.includes(b.tipo)||!escopos.includes(b.escopo)||!String(b.nome||'').trim())return respondJson(response,400,{error:'Dados da promocao invalidos'});const c=await subscriptionPool.connect();try{await c.query('BEGIN');const r=await c.query(`INSERT INTO public.promocoes(loja_id,nome,descricao,tipo,escopo,valor,quantidade_x,quantidade_y,inicio,fim,limite_total,limite_por_cliente,ativa) VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,NOW()),$10,$11,$12,true) RETURNING *`,[shopId,String(b.nome).trim(),String(b.descricao||'').slice(0,1000),b.tipo,b.escopo,Number(b.valor||0),b.quantidade_x?Number(b.quantidade_x):null,b.quantidade_y?Number(b.quantidade_y):null,b.inicio||null,b.fim||null,b.limite_total?Number(b.limite_total):null,b.limite_por_cliente?Number(b.limite_por_cliente):null]);const promo=r.rows[0];for(const id of (Array.isArray(b.produto_ids)?b.produto_ids:[])){if(/^[0-9a-f-]{36}$/i.test(id))await c.query('INSERT INTO public.promocoes_itens(promocao_id,produto_id) VALUES($1,$2)',[promo.id,id]);}for(const id of (Array.isArray(b.categoria_ids)?b.categoria_ids:[])){if(/^[0-9a-f-]{36}$/i.test(id))await c.query('INSERT INTO public.promocoes_itens(promocao_id,categoria_id) VALUES($1,$2)',[promo.id,id]);}await c.query('COMMIT');return respondJson(response,201,{promocao:promo});}catch(e){await c.query('ROLLBACK');throw e}finally{c.release();}}
+      const m=pathname.match(/^\/api\/merchant\/promotions\/([0-9a-f-]{36})$/i);if(m&&request.method==='PATCH'){const b=await readRequestJson(request);const r=await subscriptionPool.query('UPDATE public.promocoes SET ativa=$3,atualizada_em=NOW() WHERE id=$1 AND loja_id=$2 RETURNING *',[m[1],shopId,b.ativa===true]);return r.rowCount?respondJson(response,200,{promocao:r.rows[0]}):respondJson(response,404,{error:'Promocao nao encontrada'});}if(m&&request.method==='DELETE'){const r=await subscriptionPool.query('DELETE FROM public.promocoes WHERE id=$1 AND loja_id=$2 RETURNING id',[m[1],shopId]);return r.rowCount?respondJson(response,200,{ok:true}):respondJson(response,404,{error:'Promocao nao encontrada'});}return respondJson(response,405,{error:'Metodo nao permitido'});
+    })().catch(e=>{console.error('Promocoes:',e);if(!response.headersSent)respondJson(response,500,{error:e.message||'Falha nas promocoes'});});return;
+  }
+
+  if (pathname === '/api/merchant/couriers/locations' && request.method === 'GET') {
+    (async()=>{if(!subscriptionPool)return respondJson(response,503,{error:'Banco indisponivel'});const user=await authenticatedUser(request);if(!user)return respondJson(response,401,{error:'Sessao invalida'});const r=await subscriptionPool.query(`SELECT e.id,e.nome,e.telefone,e.ultima_latitude,e.ultima_longitude,e.localizacao_atualizada_em,(SELECT count(*)::int FROM public.pedidos p WHERE p.entregador_id=e.id AND p.status NOT IN ('Entregue','Cancelado','Cancelada')) pedidos_ativos FROM public.entregadores e WHERE e.loja_id=(SELECT id FROM public.lojas WHERE merchant_id=$1 ORDER BY created_at LIMIT 1) AND e.ativo=true ORDER BY e.nome`,[user.id]);return respondJson(response,200,{entregadores:r.rows.map((x,i)=>({...x,hue:(i*137.508)%360}))});})().catch(e=>{console.error(e);if(!response.headersSent)respondJson(response,500,{error:'Nao foi possivel carregar localizacoes'});});return;
+  }
+
+  if (pathname === '/api/merchant/routes/optimize' && request.method === 'POST') {
+    (async()=>{
+      if(!subscriptionPool)return respondJson(response,503,{error:'Banco indisponivel'});
+      const user=await authenticatedUser(request);if(!user)return respondJson(response,401,{error:'Sessao invalida'});
+      const shop=await subscriptionPool.query('SELECT id,endereco_rua,endereco_numero,endereco_complemento,endereco_bairro,endereco_cidade,endereco_estado,endereco_cep,latitude,longitude FROM public.lojas WHERE merchant_id=$1 ORDER BY created_at LIMIT 1',[user.id]);
+      if(!shop.rowCount)return respondJson(response,404,{error:'Loja nao encontrada'});
+      const shopRow=shop.rows[0];
+      const b=await readRequestJson(request);
+      let points=Array.isArray(b.points)?b.points.map(x=>({...x,latitude:Number(x.latitude),longitude:Number(x.longitude)})).filter(x=>Number.isFinite(x.latitude)&&Number.isFinite(x.longitude)):[];
+      const orderIds=Array.isArray(b.pedido_ids)?b.pedido_ids.filter(x=>/^[0-9a-f-]{36}$/i.test(String(x))):[];
+      if(!points.length && orderIds.length){
+        const r=await subscriptionPool.query(`SELECT p.id,p.endereco,p.endereco_partes,p.latitude_entrega,p.longitude_entrega,c.nome AS cliente_nome FROM public.pedidos p JOIN public.clientes c ON c.id=p.cliente_id WHERE p.loja_id=$1 AND p.id=ANY($2::uuid[]) AND p.tipo_entrega='delivery' AND p.status NOT IN ('Entregue','Cancelado','Cancelada') ORDER BY p.created_at`,[shopRow.id,orderIds]);
+        points=r.rows.map(x=>({id:x.id,label:x.cliente_nome||String(x.id).slice(0,8),address:x.endereco||'',latitude:x.latitude_entrega===null?null:Number(x.latitude_entrega),longitude:x.longitude_entrega===null?null:Number(x.longitude_entrega)}));
+        for(const point of points){
+          if(!Number.isFinite(point.latitude)||!Number.isFinite(point.longitude)){
+            const geo=await geocodeAddress(addressFromParts(point.endereco_partes,point.address));
+            if(geo){point.latitude=geo.latitude;point.longitude=geo.longitude;await subscriptionPool.query('UPDATE public.pedidos SET latitude_entrega=$2,longitude_entrega=$3,updated_at=NOW() WHERE id=$1 AND loja_id=$4',[point.id,geo.latitude,geo.longitude,shopRow.id]);}
+          }
+        }
+        points=points.filter(x=>Number.isFinite(x.latitude)&&Number.isFinite(x.longitude));
+      }
+      if(points.length<1)return respondJson(response,400,{error:'Nenhum pedido de entrega possui coordenadas. Verifique os enderecos.'});
+      let origin=null;
+      if(Number.isFinite(Number(b.origin?.latitude))&&Number.isFinite(Number(b.origin?.longitude))) origin={latitude:Number(b.origin.latitude),longitude:Number(b.origin.longitude)};
+      if(!origin&&Number.isFinite(Number(shopRow.latitude))&&Number.isFinite(Number(shopRow.longitude))) origin={latitude:Number(shopRow.latitude),longitude:Number(shopRow.longitude)};
+      if(!origin){const shopAddress=addressFromParts({street:shopRow.endereco_rua,number:shopRow.endereco_numero,complement:shopRow.endereco_complemento,neighborhood:shopRow.endereco_bairro,city:shopRow.endereco_cidade,state:shopRow.endereco_estado,zip:shopRow.endereco_cep});const geo=await geocodeAddress(shopAddress);if(geo){origin={latitude:geo.latitude,longitude:geo.longitude};await subscriptionPool.query('UPDATE public.lojas SET latitude=$2,longitude=$3,updated_at=NOW() WHERE id=$1',[shopRow.id,geo.latitude,geo.longitude]);}}
+      if(!origin)origin=points[0];
+      if(points.length===1)return respondJson(response,200,{provider:'single-stop',origin,optimized:[{...points[0],ordem:1}],mapUrl:`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin.latitude+','+origin.longitude)}&destination=${encodeURIComponent(points[0].latitude+','+points[0].longitude)}&travelmode=driving`});
+      const key=process.env.ORS_API_KEY;
+      if(!key)return respondJson(response,200,{provider:'fallback',origin,optimized:points.map((x,i)=>({...x,ordem:i+1})),message:'ORS_API_KEY nao configurada; enderecos foram geocodificados e a ordem original foi preservada.'});
+      const coords=points.map(x=>[x.longitude,x.latitude]);
+      const start=[origin.longitude,origin.latitude];
+      const resp=await fetch('https://api.openrouteservice.org/optimization',{method:'POST',headers:{Authorization:key,'Content-Type':'application/json'},body:JSON.stringify({jobs:points.map((_,i)=>({id:i+1,location:coords[i]})),vehicles:[{id:1,start,end:start,profile:'driving-car'}]})});
+      if(!resp.ok){const detail=await resp.text();return respondJson(response,502,{error:'OpenRouteService nao respondeu',detail:detail.slice(0,500)});}
+      const data=await resp.json();
+      const sequence=(data.routes?.[0]?.steps||[]).filter(x=>x.type==='job').map(x=>points[x.id-1]).filter(Boolean);
+      const optimized=(sequence.length?sequence:points).map((x,i)=>({...x,ordem:i+1}));
+      const waypointString=optimized.map(x=>`${x.longitude},${x.latitude}`).join(';');
+      return respondJson(response,200,{provider:'openrouteservice',origin,optimized,summary:data.routes?.[0]?.summary||null,mapUrl:`https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${encodeURIComponent(origin.latitude+','+origin.longitude+';'+waypointString)}`});
+    })().catch(e=>{console.error('ORS/geocodificacao:',e);if(!response.headersSent)respondJson(response,500,{error:'Nao foi possivel geocodificar os enderecos e otimizar a rota'});});return;
   }
 
   if (pathname.startsWith("/api/merchant/couriers")) {

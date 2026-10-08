@@ -1,17 +1,36 @@
-# Auditoria técnica do pacote enviado
+# Auditoria da versão consolidada atualizada
 
-## Ajuste aplicado
-- O botão de GPS agora verifica contexto seguro (HTTPS), mantém o estado de carregamento enquanto aguarda uma posição real, exibe erros de permissão/sinal e reabilita o botão para nova tentativa.
-- A variável de geocodificação foi removida porque o cadastro automático de bairros não é mais usado.
+## Implementado nesta rodada
 
-## Pendências identificadas que impedem afirmar que o sistema está completo
-- As conversas dos pedidos agora usam endpoints autenticados e a tabela `public.mensagens_pedidos` para compartilhar mensagens entre cliente e comerciante. Execute `mensagens-pedidos.sql` no Supabase antes de usar o chat.
-- O cálculo de rotas inteligentes para entregas ainda não está implementado neste pacote; a busca automática de bairros foi removida.
-- O pedido público depende de `DATABASE_URL` e das tabelas/colunas usadas no `server.js`, incluindo `pedidos.public_token_hash`, `pedidos.previsao_entrega`, `pedidos.entregador_id`, `entregadores` e `produtos.opcoes`. Este ZIP não permite validar o banco real do usuário.
-- O GPS do navegador só pode ser usado em HTTPS (ou localhost), com permissão do usuário; o compartilhamento também depende de manter a página do entregador aberta.
+- Relatórios do comerciante com filtros de período, delivery/retirada, status e pagamento.
+- KPIs de faturamento, pedidos, ticket médio, unidades, cancelamentos e descontos.
+- Ranking de produtos, pagamentos, faturamento diário e pedidos por horário.
+- Central de Promoções com criação, ativação/pausa, exclusão e escopos loja/produto/categoria.
+- Tipos de promoção: percentual, valor fixo, preço promocional e compre X/pague Y.
+- Agendamento, limite total e limite por cliente.
+- Aplicação automática da melhor promoção elegível no checkout público, sem empilhar descontos concorrentes.
+- Registro do desconto no pedido e contagem de uso da promoção.
+- Tela administrativa de localização dos entregadores com OpenStreetMap/Leaflet.
+- Endpoint de localização dos entregadores ativos e marcadores individuais.
+- Endpoint de otimização de rota via OpenRouteService quando `ORS_API_KEY` estiver configurada, com fallback para a ordem original.
+- SQL incremental para índices/colunas necessários.
+- Mantida a tabela de contato administrativo com `id UUID`, `nome`, `whatsapp` e `ativo`.
 
-## Testes
-- `node --check server.js` e `node --check app.js` não apontaram erros de sintaxe no pacote. Isso não equivale a teste integrado com Supabase, navegador ou celular.
+## Validações realizadas
 
-## Próxima etapa necessária
-O chat requer a migração `mensagens-pedidos.sql`. O fluxo ORS e os testes integrados ainda dependem de implementação/configuração adicional e validação com o banco real e a hospedagem.
+- `node --check app.js`
+- `node --check server.js`
+- Revisão das rotas novas e dos nomes das colunas usados no SQL.
+
+## Dependências de ambiente
+
+- `DATABASE_URL` deve estar configurada no Render para as rotas de banco.
+- `ORS_API_KEY` deve estar configurada no Render para otimização real pelo OpenRouteService.
+- O SQL `SUPABASE-CONSOLIDADO-FINAL.sql` deve ser executado no Supabase antes de usar as novas tabelas/índices.
+- O mapa usa Leaflet e tiles do OpenStreetMap no navegador.
+
+## Limites conhecidos
+
+- A otimização de rota exige coordenadas dos pontos. O endpoint recebe pontos geográficos; ele não transforma automaticamente endereços em coordenadas.
+- A disponibilidade real de Bluetooth/USB depende das APIs e permissões do navegador/dispositivo.
+- A validação final contra o banco/Render do usuário depende das credenciais e ambiente de execução do projeto.

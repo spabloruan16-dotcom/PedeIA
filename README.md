@@ -1,44 +1,45 @@
-# PedeIA
+# PedeIA — versão consolidada atualizada
 
-Projeto independente de pedidos por link para restaurantes, lanchonetes, lojas e outros comercios locais.
+Esta versão reúne a base mestre e as funcionalidades adicionadas nesta rodada.
 
-## Conceito
+## Principais módulos
 
-O comerciante configura sua loja, categorias e produtos no painel. O PedeIA gera um link publico exclusivo, como `?loja=brasa-e-massa`. O cliente entra por esse link, ve somente aquela loja, monta a sacola e envia os dados de entrega e pagamento.
+- Autenticação Supabase e bloqueio por assinatura.
+- Painel do comerciante e vitrine pública.
+- Pedidos ativos e histórico.
+- Conversas de pedidos ativos.
+- Suporte com anexos.
+- Entregadores com link individual persistente, GPS e histórico.
+- Localização dos entregadores no mapa.
+- Relatórios de vendas.
+- Promoções automáticas.
+- Personalização da vitrine.
+- Categorias e produtos com opções/adicionais.
+- Impressoras e configurações de impressão.
+- Tutorial interativo.
+- Contato administrativo por WhatsApp.
 
-O cliente nao cria conta nem faz cadastro. Cada comercio possui um identificador publico persistente no link. O painel deixa esse link visivel na lateral, no dashboard e na tela **Minha loja**, com acao para copiar e enviar pelo WhatsApp.
+## Banco
 
-## Rodar
+Execute `SUPABASE-CONSOLIDADO-FINAL.sql` no SQL Editor do Supabase.
 
-```powershell
-npm start
-```
+O SQL é incremental e não usa `id = 1` para o contato administrativo. A tabela esperada é:
 
-Abra `http://localhost:4173` para o painel. Clique em **Ver minha loja** ou use `?loja=brasa-e-massa` para a vitrine do cliente.
+- `id` UUID
+- `nome` text
+- `whatsapp` text
+- `ativo` boolean
 
-Esta primeira versao usa `localStorage` para prototipo. Todo o codigo deste projeto, incluindo servidor, frontend e documentacao, esta dentro desta pasta `PedeIA` e nao depende dos projetos antigos.
+## Render
 
-## Publicar no GitHub e Render
+Configure pelo menos:
 
-Envie o conteudo desta pasta para um repositorio proprio chamado `pedeia`. Nao envie `node_modules` nem arquivos `.env`.
+- `DATABASE_URL`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `PUBLIC_BASE_URL`
+- `ORS_API_KEY` para otimização de rotas
 
-No Render, crie um **Web Service** conectado ao repositorio e use:
+## Observação
 
-- **Runtime:** Node
-- **Build Command:** `npm install`
-- **Start Command:** `npm start`
-- **Health Check Path:** `/api/health`
-
-Se o repositorio tiver somente os arquivos desta pasta, nao preencha **Root Directory**. Se voce enviar a pasta maior contendo `PedeIA`, use `PedeIA` como **Root Directory**.
-
-Depois do deploy, teste `https://SEU-APP.onrender.com/api/health`. A resposta esperada e:
-
-```json
-{"ok":true,"service":"pedeia"}
-```
-
-O arquivo `render.yaml` ja guarda essa configuracao para o deploy automatico pelo Render Blueprint.
-
-
-### Acompanhamento público do pedido
-Após o checkout pela vitrine pública, o cliente recebe um link individual de acompanhamento. A página `/acompanhar?token=...` consulta o status periodicamente e exibe a última localização GPS compartilhada pelo entregador em um mapa OpenStreetMap, além de permitir abrir o ponto no Google Maps. O rastreamento depende de HTTPS, permissão de geolocalização no dispositivo do entregador e publicação do servidor atualizado.
+As novas rotas de relatórios, promoções, localização e otimização ficam protegidas pela sessão autenticada do comerciante.

@@ -14,15 +14,24 @@ ALTER TABLE public.entregadores ADD COLUMN IF NOT EXISTS localizacao_atualizada_
 ALTER TABLE public.entregadores ADD COLUMN IF NOT EXISTS token_value text;
 CREATE UNIQUE INDEX IF NOT EXISTS entregadores_token_value_key ON public.entregadores(token_value) WHERE token_value IS NOT NULL;
 
--- Contato único do administrador, compatível com o servidor atual.
+-- Contato único do administrador.
+-- Compatível tanto com uma instalação nova quanto com a tabela criada pela versão anterior,
+-- que pode ter usado os nomes nome/whatsapp em vez de name/phone.
 CREATE TABLE IF NOT EXISTS public.pedeia_admin_contact (
   id smallint PRIMARY KEY DEFAULT 1,
-  name varchar(100) NOT NULL DEFAULT '',
-  phone varchar(30) NOT NULL DEFAULT '',
+  name varchar(100),
+  phone varchar(30),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT pedeia_admin_contact_singleton CHECK (id = 1)
 );
-INSERT INTO public.pedeia_admin_contact(id,name,phone) VALUES (1,'','') ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE public.pedeia_admin_contact ADD COLUMN IF NOT EXISTS name varchar(100);
+ALTER TABLE public.pedeia_admin_contact ADD COLUMN IF NOT EXISTS phone varchar(30);
+ALTER TABLE public.pedeia_admin_contact ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
+INSERT INTO public.pedeia_admin_contact(id,name,phone)
+VALUES (1,'','')
+ON CONFLICT (id) DO NOTHING;
 
 -- Progresso do tutorial por comerciante/tela.
 CREATE TABLE IF NOT EXISTS public.pedeia_tutorial_progress (
