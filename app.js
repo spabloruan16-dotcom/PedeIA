@@ -2830,7 +2830,7 @@ function checkoutDialog() {
         <label>Ponto de referência <span class="optional-label">(opcional)</span><input name="reference" value="${esc(cached.addressParts?.reference || '')}" placeholder="Ex.: perto da praça"></label>
       </div>
       <label>Pagamento<select name="payment"><option>Pix</option><option>Cartao na entrega</option><option>Dinheiro</option></select></label>
-      <button class="primary-button">Enviar pedido</button>
+      <button class="primary-button" type="submit">Enviar pedido</button>
     </form>
   `);
 
@@ -2860,7 +2860,7 @@ function checkoutDialog() {
     const estimatedDeliveryFee=fulfillment==='delivery'?Math.max(0,Number(typeof selectedNeighborhood==='string'?0:(selectedNeighborhood?.taxa??selectedNeighborhood?.fee??0))):0;
 
     const customer = String(data.get('customer') || '').trim();
-    const phone = String(data.get('phone') || '').trim();
+    const phone = String(data.get('whatsapp') || '').trim();
     if (!customer || !phone) {
       notify('Informe seu nome e telefone para continuar.');
       return;
