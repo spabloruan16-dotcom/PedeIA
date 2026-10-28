@@ -827,7 +827,6 @@ http.createServer((request, response) => {
            FROM public.mensagens_pedidos m
            JOIN public.pedidos p ON p.id=m.pedido_id
            WHERE p.loja_id=$1
-             AND p.status NOT IN ('Entregue','Finalizado','Cancelado','Cancelada')
              ${orderClause}
            ORDER BY m.created_at ASC LIMIT 1000`,
           values

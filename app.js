@@ -556,16 +556,26 @@ async function refreshMerchantOrders() {
 async function loadMerchantOrderMessages() {
   const result = await merchantApiRequest('/api/merchant/order-messages');
   const currentMessages = state.messages.filter((message) => message.scope === 'order');
+  const incomingMessages = (result.mensagens || []).map((message) => ({
+    id: message.id,
+    orderId: message.pedido_id,
+    from: message.remetente_tipo === 'comerciante' ? 'merchant' : 'customer',
+    text: message.conteudo,
+    time: new Date(message.created_at).toLocaleString('pt-BR'),
+    scope: 'order'
+  }));
+
+  const mergedMessages = [...currentMessages, ...incomingMessages];
+  const deduped = new Map();
+  for (const message of mergedMessages) {
+    const key = `${String(message.orderId || '')}:${String(message.id || '')}`;
+    if (!key || !message.id) continue;
+    deduped.set(key, message);
+  }
+
   state.messages = [
     ...state.messages.filter((message) => message.scope !== 'order'),
-    ...(result.mensagens || []).map((message) => ({
-      id: message.id,
-      orderId: message.pedido_id,
-      from: message.remetente_tipo === 'comerciante' ? 'merchant' : 'customer',
-      text: message.conteudo,
-      time: new Date(message.created_at).toLocaleString('pt-BR'),
-      scope: 'order'
-    }))
+    ...Array.from(deduped.values()).sort((a, b) => String(a.orderId).localeCompare(String(b.orderId)) || String(a.time).localeCompare(String(b.time)))
   ];
   localStorage.setItem(stateKey, JSON.stringify(state));
   return fingerprint(currentMessages) !== fingerprint(state.messages.filter((message) => message.scope === 'order'));
@@ -1443,15 +1453,24 @@ async function orderDetails(order) {
   if (authenticatedUser) {
     try {
       const result = await merchantApiRequest(`/api/merchant/order-messages?pedido_id=${encodeURIComponent(order.id)}`);
-      state.messages = state.messages.filter((message) => String(message.orderId) !== String(order.id) || message.scope !== 'order')
-        .concat((result.mensagens || []).map((message) => ({
-          id: message.id,
-          orderId: message.pedido_id,
-          from: message.remetente_tipo === 'comerciante' ? 'merchant' : 'customer',
-          text: message.conteudo,
-          time: new Date(message.created_at).toLocaleString('pt-BR'),
-          scope: 'order'
-        })));
+      const incoming = (result.mensagens || []).map((message) => ({
+        id: message.id,
+        orderId: message.pedido_id,
+        from: message.remetente_tipo === 'comerciante' ? 'merchant' : 'customer',
+        text: message.conteudo,
+        time: new Date(message.created_at).toLocaleString('pt-BR'),
+        scope: 'order'
+      }));
+      const currentOrderMessages = state.messages.filter((message) => String(message.orderId) !== String(order.id) || message.scope !== 'order');
+      const merged = [...currentOrderMessages, ...incoming];
+      const deduped = new Map();
+      for (const message of merged) {
+        const key = `${String(message.orderId || '')}:${String(message.id || '')}`;
+        if (!key || !message.id) continue;
+        deduped.set(key, message);
+      }
+      state.messages = Array.from(deduped.values());
+      localStorage.setItem(stateKey, JSON.stringify(state));
     } catch (error) {
       notify(error.message || 'Não foi possível carregar a conversa deste pedido.');
     }
@@ -1471,10 +1490,10 @@ async function orderDetails(order) {
       <div class="chat-messages compact">
         ${messages.map((msg) => `<div class="message ${msg.from === 'merchant' ? 'mine' : ''}">${esc(msg.text)}<small>${esc(msg.time)}</small></div>`).join('') || '<small>Nenhuma mensagem neste pedido.</small>'}
       </div>
-      <form class="inline-chat" data-order-chat="${order.id}">
+      ${isActiveOrder(order) ? `<form class="inline-chat" data-order-chat="${order.id}">
         <input name="message" required placeholder="Fale sobre este pedido">
         <button>Enviar</button>
-      </form>
+      </form>` : '<small>Pedido encerrado. Conversa disponível somente para consulta.</small>'}
     </div>
   `);
 
@@ -1574,8 +1593,7 @@ function categoryView() {
 function chatView() {
   const filter = state.chatFilter || 'all';
   const statusFilter = state.chatStatusFilter || 'all';
-  const active = activeOrders();
-  const withMessages = active.filter((order) => state.messages.some((message) => message.scope === 'order' && String(message.orderId) === String(order.id)));
+  const withMessages = state.orders.filter((order) => state.messages.some((message) => message.scope === 'order' && String(message.orderId) === String(order.id)));
   const filtered = withMessages.filter((order) => {
     const typeOk = filter === 'all' || String(order.fulfillment || '').toLowerCase() === filter;
     const statusOk = statusFilter === 'all' || String(order.status || '').trim() === statusFilter;
@@ -1587,7 +1605,7 @@ function chatView() {
       <div>
         <p class="eyebrow">CONVERSE COM QUEM PEDIU</p>
         <h1>Conversas</h1>
-        <p class="intro-copy">Somente conversas de pedidos ativos. Clique em um pedido para abrir a conversa.</p>
+        <p class="intro-copy">As conversas ficam disponíveis para consulta mesmo depois que o pedido é encerrado.</p>
       </div>
     </section>
 
@@ -1600,12 +1618,16 @@ function chatView() {
       </div>
       <label class="chat-status-filter">Status:
         <select data-chat-status-filter>
-          <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>Todos os ativos</option>
+          <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>Todos os pedidos</option>
           <option value="Aguardando" ${statusFilter === 'Aguardando' ? 'selected' : ''}>Aguardando</option>
           <option value="Em preparo" ${statusFilter === 'Em preparo' ? 'selected' : ''}>Em preparo</option>
           <option value="Pronto" ${statusFilter === 'Pronto' ? 'selected' : ''}>Pronto</option>
           <option value="Saiu para entrega" ${statusFilter === 'Saiu para entrega' ? 'selected' : ''}>Saiu para entrega</option>
           <option value="Em rota" ${statusFilter === 'Em rota' ? 'selected' : ''}>Em rota</option>
+          <option value="Entregue" ${statusFilter === 'Entregue' ? 'selected' : ''}>Entregue</option>
+          <option value="Finalizado" ${statusFilter === 'Finalizado' ? 'selected' : ''}>Finalizado</option>
+          <option value="Cancelado" ${statusFilter === 'Cancelado' ? 'selected' : ''}>Cancelado</option>
+          <option value="Cancelada" ${statusFilter === 'Cancelada' ? 'selected' : ''}>Cancelada</option>
         </select>
       </label>
       <span class="chat-result-count">${filtered.length} conversa(s)</span>
@@ -1616,6 +1638,7 @@ function chatView() {
         const messages = state.messages.filter((message) => message.scope === 'order' && String(message.orderId) === String(order.id));
         const last = messages[messages.length - 1];
         const open = String(merchantChatOpenId || '') === String(order.id);
+        const closed = !isActiveOrder(order);
         const fulfillmentLabel = String(order.fulfillment || '').toLowerCase() === 'delivery' ? 'Entrega' : 'Retirada';
         return `<article class="panel merchant-conversation ${open ? 'is-open' : ''}">
           <button type="button" class="merchant-conversation-toggle" data-chat-open="${esc(order.id)}" aria-expanded="${open ? 'true' : 'false'}">
@@ -1623,9 +1646,9 @@ function chatView() {
             <span class="conversation-main"><strong>${esc(order.customer || 'Cliente')}</strong><small>Pedido #${esc(String(order.id).slice(0,8))} · ${esc(fulfillmentLabel)} · ${esc(order.status)}</small>${last ? `<span class="conversation-preview">${last.from === 'merchant' ? 'Você: ' : ''}${esc(last.text)}</span>` : ''}</span>
             <span class="conversation-meta"><b>${messages.length}</b><span>${open ? 'Fechar' : 'Abrir'}</span></span>
           </button>
-          ${open ? `<div class="merchant-conversation-body"><div class="chat-messages compact">${messages.map((message) => `<div class="message ${message.from === 'merchant' ? 'mine' : ''}">${esc(message.text)}<small>${esc(message.time)}</small></div>`).join('')}</div><form class="chat-compose merchant-order-chat" data-order-chat="${esc(order.id)}"><input name="message" required maxlength="2000" placeholder="Responder ao cliente"><button type="submit">Enviar</button></form></div>` : ''}
+          ${open ? `<div class="merchant-conversation-body"><div class="chat-messages compact">${messages.map((message) => `<div class="message ${message.from === 'merchant' ? 'mine' : ''}">${esc(message.text)}<small>${esc(message.time)}</small></div>`).join('')}</div>${closed ? '<p class="admin-empty">Pedido encerrado. Conversa disponível somente para consulta.</p>' : `<form class="chat-compose merchant-order-chat" data-order-chat="${esc(order.id)}"><input name="message" required maxlength="2000" placeholder="Responder ao cliente"><button type="submit">Enviar</button></form>`}</div>` : ''}
         </article>`;
-      }).join('') || empty('Nenhuma conversa ativa', 'As conversas aparecem aqui somente enquanto o pedido estiver ativo e houver mensagens do cliente.')}
+      }).join('') || empty('Nenhuma conversa', 'As conversas aparecem aqui depois que o cliente envia uma mensagem.')}
     </section>
   `;
 }
@@ -1884,29 +1907,6 @@ function customerShop() {
     button.onclick = handleAction;
   });
 
-  document.querySelectorAll('.merchant-order-chat').forEach((form) => {
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const input = form.elements.message;
-      const text = String(input.value || '').trim();
-      if (!text) return;
-      const button = form.querySelector('button[type="submit"]');
-      if (button) button.disabled = true;
-      try {
-        await merchantApiRequest('/api/merchant/order-messages', 'POST', {
-          pedido_id: form.dataset.orderChat,
-          conteudo: text
-        });
-        await loadMerchantOrderMessages();
-        render();
-      } catch (error) {
-        notify(error.message || 'Não foi possível enviar a mensagem.');
-      } finally {
-        if (button) button.disabled = false;
-      }
-    });
-  });
-
   document.querySelectorAll('[data-customer-view]').forEach((button) => {
     button.onclick = () => {
       state.customerView = button.dataset.customerView;
@@ -2106,28 +2106,64 @@ function subscriptionUnavailableView() {
 }
 
 const TUTORIALS={
-  dashboard:[['Visão geral','Aqui você acompanha os principais números da sua loja.'],['Pedidos ativos','O contador mostra somente pedidos que ainda estão em andamento.'],['Menu lateral','Use o menu para acessar pedidos, histórico, entregadores, conversas, suporte e configurações.']],
-  orders:[['Pedidos','Esta é a central para acompanhar os pedidos recebidos.'],['Status','Use os botões do pedido para avançar o preparo e a entrega.'],['Atualização automática','Novos pedidos e mudanças de status chegam automaticamente depois do login.']],
-  history:[['Histórico','Aqui ficam os pedidos já encerrados, separados dos pedidos ativos.'],['Filtros','Use período, delivery/retirada e busca para encontrar pedidos antigos.']],
-  couriers:[['Entregadores','Cadastre cada entregador uma única vez e compartilhe o link individual.'],['Localização','Quando o entregador compartilhar GPS, a posição poderá aparecer no mapa de localização.'],['Link individual','Use “Copiar link” para enviar novamente o acesso do entregador.']],
-  chat:[['Conversas','Aqui aparecem apenas conversas ligadas a pedidos que ainda estão ativos.'],['Abrir conversa','Clique no pedido para abrir a conversa e responder ao cliente.']],
-  support:[['Suporte','Use esta área para falar diretamente com o administrador.'],['Iniciar conversa','Abra um novo chamado somente quando precisar de atendimento.'],['Anexos','Você pode enviar imagens e PDFs junto da mensagem.']],
-  printers:[['Impressoras','Cadastre e teste suas impressoras térmicas nesta área.'],['Teste','Use o teste antes de ativar a impressão automática dos pedidos.']],
-  menu:[['Cardápio','Cadastre e organize seus produtos e suas opções.'],['Adicionais','Os adicionais podem ser configurados com quantidade máxima e preço por unidade.']],
-  categories:[['Categorias','Organize os produtos da loja por categorias.']],
-  settings:[['Minha loja','Configure os dados, horários e aparência básica da loja.']]
+  dashboard:[['Visão geral','Acompanhe aqui os principais números e a atividade recente da sua loja.'],['Pedidos ativos','Este resumo mostra pedidos que ainda estão em andamento.'],['Navegação','Use o menu lateral para abrir pedidos, histórico, entregadores, conversas e configurações.']],
+  orders:[['Central de pedidos','Veja os pedidos recebidos e abra um cartão para conferir os detalhes.'],['Atualize o andamento','Use as ações do pedido para avançar o preparo e informar o cliente.'],['Acompanhe em tempo real','Os pedidos e as mudanças de status são atualizados automaticamente.']],
+  history:[['Histórico de pedidos','Consulte pedidos já concluídos ou cancelados.'],['Encontre um pedido','Combine período, forma de recebimento e busca para localizar um registro.']],
+  couriers:[['Equipe de entrega','Cadastre entregadores e mantenha os dados de cada um organizados.'],['Compartilhe o acesso','Copie o link individual para o entregador acompanhar suas entregas.'],['Acompanhe a operação','Consulte entregas concluídas e localização quando o GPS estiver disponível.']],
+  chat:[['Conversas com clientes','Encontre aqui as mensagens vinculadas aos pedidos da loja.'],['Abra para responder','Selecione uma conversa para ler o histórico e responder enquanto o pedido estiver ativo.']],
+  support:[['Suporte da plataforma','Use esta área para conversar com a equipe de suporte.'],['Abra um atendimento','Descreva sua dúvida para iniciar um chamado.'],['Envie anexos','Inclua imagens ou PDFs para explicar melhor o problema.']],
+  printers:[['Impressoras','Configure as impressoras usadas para os pedidos.'],['Faça um teste','Confira a impressão antes de ativar a impressão automática.']],
+  menu:[['Cardápio digital','Cadastre produtos, preços, descrições e disponibilidade.'],['Opções e adicionais','Configure escolhas e adicionais para personalizar os produtos.']],
+  categories:[['Categorias','Agrupe seus produtos para facilitar a navegação no cardápio.']],
+  settings:[['Dados da loja','Atualize as informações que aparecem para seus clientes.'],['Horários e aparência','Configure o funcionamento e a identidade visual da vitrine.']]
 };
 function tutorialKey(view){return `${state.merchant?.authUserId||authenticatedUser?.id||'merchant'}:${view}`;}
 function tutorialSeen(view){try{return localStorage.getItem(`pedeia-tutorial-seen:${tutorialKey(view)}`)==='1';}catch{return false;}}
 function setTutorialSeen(view){try{localStorage.setItem(`pedeia-tutorial-seen:${tutorialKey(view)}`,'1');}catch{}}
 function tutorialTarget(view,step){const map={dashboard:['.main-content .page-intro','.main-content .stats-grid','.side-nav'],orders:['.order-board','.order-board','.side-nav'],history:['.order-history-list','.history-period-bar'],couriers:['.courier-list','.courier-list','.courier-actions'],chat:['.merchant-conversations','.merchant-conversations'],support:['.support-layout','.support-new-form','.support-list'],printers:['.printer-row','.settings-grid'],menu:['.menu-grid','.menu-grid'],categories:['.category-grid','.category-grid'],settings:['.settings-grid']};return map[view]?.[step]||'.main-content';}
-function closeTutorial(){document.querySelector('.pedeia-tutorial-overlay')?.remove();tutorialOverlayOpen=false;document.body.classList.remove('tutorial-lock');}
-function showTutorial(view=state.view,force=false){const steps=TUTORIALS[view]||[['PedeIA','Este robô explica os recursos desta tela.']];if(!force&&tutorialSeen(view))return;closeTutorial();tutorialState={view,step:0};tutorialOverlayOpen=true;document.body.classList.add('tutorial-lock');
-  const overlay=document.createElement('div');overlay.className='pedeia-tutorial-overlay';overlay.innerHTML=`<div class="pedeia-tutorial-backdrop"></div><section class="pedeia-tutorial-card" role="dialog" aria-modal="true"><div class="pedeia-tutorial-robot">🤖</div><div class="pedeia-tutorial-content"><span class="pedeia-tutorial-kicker">TUTORIAL DA TELA</span><h2></h2><p></p><div class="pedeia-tutorial-progress"></div><div class="pedeia-tutorial-actions"><button type="button" class="secondary-button" data-tutorial-skip>Pular</button><button type="button" class="primary-button" data-tutorial-next>Próximo</button></div></div></section>`;document.body.appendChild(overlay);
-  const renderStep=()=>{const step=steps[tutorialState.step];overlay.querySelector('h2').textContent=step[0];overlay.querySelector('p').textContent=step[1];overlay.querySelector('.pedeia-tutorial-progress').textContent=`${tutorialState.step+1} de ${steps.length}`;overlay.querySelector('[data-tutorial-next]').textContent=tutorialState.step===steps.length-1?'Concluir':'Próximo';document.querySelectorAll('.pedeia-tutorial-highlight').forEach(e=>e.classList.remove('pedeia-tutorial-highlight'));const target=document.querySelector(tutorialTarget(view,tutorialState.step));if(target)target.classList.add('pedeia-tutorial-highlight');};
-  overlay.querySelector('[data-tutorial-skip]').onclick=()=>{setTutorialSeen(view);closeTutorial();};overlay.querySelector('[data-tutorial-next]').onclick=()=>{if(tutorialState.step>=steps.length-1){setTutorialSeen(view);closeTutorial();}else{tutorialState.step++;renderStep();}};overlay.querySelector('.pedeia-tutorial-backdrop').onclick=()=>{};renderStep();
+function closeTutorial(){document.querySelectorAll('.pedeia-tutorial-highlight').forEach(element=>element.classList.remove('pedeia-tutorial-highlight'));document.querySelector('.pedeia-tutorial-overlay')?.remove();tutorialOverlayOpen=false;document.body.classList.remove('tutorial-lock');}
+function showTutorial(view=state.view,force=false){
+  const steps=TUTORIALS[view]||[['Bem-vindo ao PedeIA','Este guia rápido mostra os principais recursos desta tela.']];
+  if(!force&&tutorialSeen(view))return;
+  closeTutorial();
+  tutorialState={view,step:0};
+  tutorialOverlayOpen=true;
+  document.body.classList.add('tutorial-lock');
+  const overlay=document.createElement('div');
+  overlay.className='pedeia-tutorial-overlay';
+  overlay.innerHTML=`<div class="pedeia-tutorial-backdrop"></div><section class="pedeia-tutorial-card" role="dialog" aria-modal="true" aria-labelledby="pedeia-tutorial-title" aria-describedby="pedeia-tutorial-description" tabindex="-1"><button type="button" class="pedeia-tutorial-close" data-tutorial-skip aria-label="Fechar tutorial">×</button><div class="pedeia-tutorial-robot" aria-hidden="true">🤖</div><div class="pedeia-tutorial-content"><span class="pedeia-tutorial-kicker">GUIA RÁPIDO DA TELA</span><div class="pedeia-tutorial-progress-track"><span class="pedeia-tutorial-progress-fill"></span></div><span class="pedeia-tutorial-step-count" aria-live="polite"></span><h2 id="pedeia-tutorial-title"></h2><p id="pedeia-tutorial-description"></p><div class="pedeia-tutorial-actions"><button type="button" class="secondary-button" data-tutorial-back>Voltar</button><button type="button" class="secondary-button" data-tutorial-skip>Pular guia</button><button type="button" class="primary-button" data-tutorial-next>Próximo</button></div></div></section>`;
+  document.body.appendChild(overlay);
+  const finish=()=>{setTutorialSeen(view);closeTutorial();};
+  const renderStep=()=>{
+    const step=steps[tutorialState.step];
+    overlay.querySelector('#pedeia-tutorial-title').textContent=step[0];
+    overlay.querySelector('#pedeia-tutorial-description').textContent=step[1];
+    overlay.querySelector('.pedeia-tutorial-step-count').textContent=`Etapa ${tutorialState.step+1} de ${steps.length}`;
+    overlay.querySelector('.pedeia-tutorial-progress-fill').style.width=`${((tutorialState.step+1)/steps.length)*100}%`;
+    overlay.querySelector('[data-tutorial-back]').disabled=tutorialState.step===0;
+    overlay.querySelector('[data-tutorial-next]').textContent=tutorialState.step===steps.length-1?'Concluir':'Próximo';
+    document.querySelectorAll('.pedeia-tutorial-highlight').forEach(element=>element.classList.remove('pedeia-tutorial-highlight'));
+    const target=document.querySelector(tutorialTarget(view,tutorialState.step));
+    if(target)target.classList.add('pedeia-tutorial-highlight');
+  };
+  overlay.querySelectorAll('[data-tutorial-skip]').forEach(button=>button.addEventListener('click',finish));
+  overlay.querySelector('[data-tutorial-back]').addEventListener('click',()=>{
+    if(tutorialState.step>0){tutorialState.step--;renderStep();}
+  });
+  overlay.querySelector('[data-tutorial-next]').addEventListener('click',()=>{
+    if(tutorialState.step>=steps.length-1)finish();
+    else{tutorialState.step++;renderStep();}
+  });
+  overlay.querySelector('.pedeia-tutorial-backdrop').addEventListener('click',finish);
+  overlay.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){event.preventDefault();finish();}
+    if(event.key==='ArrowRight'&&tutorialState.step<steps.length-1){tutorialState.step++;renderStep();}
+    if(event.key==='ArrowLeft'&&tutorialState.step>0){tutorialState.step--;renderStep();}
+  });
+  renderStep();
+  overlay.querySelector('.pedeia-tutorial-card').focus();
 }
-function mountTutorialRobot(){if(!merchantLogged()||isAdmin)return;document.querySelector('.pedeia-tutorial-robot-fab')?.remove();const fab=document.createElement('button');fab.className='pedeia-tutorial-robot-fab';fab.type='button';fab.title='Abrir tutorial desta tela';fab.setAttribute('aria-label','Abrir tutorial desta tela');fab.innerHTML='🤖<span data-tutorial-hide title="Ocultar robô até entrar novamente no site">×</span>';if(tutorialRobotHidden)return;document.body.appendChild(fab);let dragging=false,moved=false,startX=0,startY=0,left=0,top=0;const onDown=e=>{dragging=true;moved=false;const p=e.touches?.[0]||e;const r=fab.getBoundingClientRect();left=r.left;top=r.top;startX=p.clientX;startY=p.clientY;fab.setPointerCapture?.(e.pointerId);};const onMove=e=>{if(!dragging)return;const p=e.touches?.[0]||e;const dx=p.clientX-startX,dy=p.clientY-startY;if(Math.abs(dx)+Math.abs(dy)>6)moved=true;fab.style.left=`${Math.max(4,Math.min(window.innerWidth-64,left+dx))}px`;fab.style.top=`${Math.max(4,Math.min(window.innerHeight-64,top+dy))}px`;fab.style.right='auto';};const onUp=()=>{dragging=false;};fab.addEventListener('pointerdown',onDown);fab.addEventListener('pointermove',onMove);fab.addEventListener('pointerup',onUp);fab.addEventListener('click',e=>{if(moved){e.preventDefault();return;}showTutorial(state.view,true);});fab.querySelector('[data-tutorial-hide]').addEventListener('click',e=>{e.stopPropagation();tutorialRobotHidden=true;fab.remove();notify('Robô ocultado até você entrar novamente no site.');});}
+function mountTutorialRobot(){if(!merchantLogged()||isAdmin)return;document.querySelector('.pedeia-tutorial-robot-fab')?.remove();const fab=document.createElement('button');fab.className='pedeia-tutorial-robot-fab';fab.type='button';fab.title='Abrir tutorial desta tela';fab.setAttribute('aria-label','Abrir tutorial desta tela');fab.innerHTML='🤖<span data-tutorial-hide title="Ocultar robô até entrar novamente no site">×</span>';if(tutorialRobotHidden)return;document.body.appendChild(fab);let dragging=false,moved=false,startX=0,startY=0,left=0,top=0;const onDown=e=>{dragging=true;moved=false;const p=e.touches?.[0]||e;const r=fab.getBoundingClientRect();left=r.left;top=r.top;startX=p.clientX;startY=p.clientY;fab.setPointerCapture?.(e.pointerId);};const onMove=e=>{if(!dragging)return;const p=e.touches?.[0]||e;const dx=p.clientX-startX,dy=p.clientY-startY;if(Math.abs(dx)+Math.abs(dy)>6)moved=true;const maxLeft=Math.max(4,window.innerWidth-fab.offsetWidth-4),maxTop=Math.max(4,window.innerHeight-fab.offsetHeight-4);fab.style.left=`${Math.max(4,Math.min(maxLeft,left+dx))}px`;fab.style.top=`${Math.max(4,Math.min(maxTop,top+dy))}px`;fab.style.right='auto';fab.style.bottom='auto';};const onUp=()=>{dragging=false;};fab.addEventListener('pointerdown',onDown);fab.addEventListener('pointermove',onMove);fab.addEventListener('pointerup',onUp);fab.addEventListener('pointercancel',onUp);fab.addEventListener('click',e=>{if(moved){e.preventDefault();return;}showTutorial(state.view,true);});fab.querySelector('[data-tutorial-hide]').addEventListener('click',e=>{e.stopPropagation();tutorialRobotHidden=true;fab.remove();notify('Robô ocultado até você entrar novamente no site.');});}
 function initTutorialForView(){if(!merchantLogged()||isAdmin)return;mountTutorialRobot();setTimeout(()=>{if(!tutorialSeen(state.view))showTutorial(state.view,false);},250);}
 
 function bindMerchant() {
@@ -2274,6 +2310,29 @@ function bindMerchant() {
       merchantChatOpenId = String(merchantChatOpenId || '') === id ? null : id;
       renderSaved();
     };
+  });
+
+  document.querySelectorAll('.merchant-order-chat').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const input = form.elements.message;
+      const text = String(input.value || '').trim();
+      if (!text) return;
+      const button = form.querySelector('button[type="submit"]');
+      if (button) button.disabled = true;
+      try {
+        await merchantApiRequest('/api/merchant/order-messages', 'POST', {
+          pedido_id: form.dataset.orderChat,
+          conteudo: text
+        });
+        await loadMerchantOrderMessages();
+        renderSaved();
+      } catch (error) {
+        notify(error.message || 'Não foi possível enviar a mensagem.');
+      } finally {
+        if (button) button.disabled = false;
+      }
+    });
   });
 
   document.querySelectorAll('[data-history-period]').forEach((button) => {

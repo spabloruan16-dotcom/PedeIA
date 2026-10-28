@@ -47,7 +47,7 @@ As novas rotas de relatórios, promoções, localização e otimização ficam p
 
 ## Instalação desta versão consolidada
 
-Execute **somente `SUPABASE-CONSOLIDADO-FINAL.sql`** no Supabase. Os arquivos SQL marcados como LEGADO são apenas referência histórica e não devem ser executados isoladamente.
+Execute **somente `SUPABASE-CONSOLIDADO-FINAL.sql`** no Supabase. Ele também cria a tabela e o índice da conversa entre cliente e loja (`mensagens_pedidos`), usados pelo botão “Falar com a loja”. Os arquivos SQL marcados como LEGADO são apenas referência histórica e não devem ser executados isoladamente.
 
 ### Variáveis do Render
 - `SUPABASE_URL`
