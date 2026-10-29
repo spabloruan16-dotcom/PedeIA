@@ -15,7 +15,7 @@
   <link rel="stylesheet" href="/css/04.css">
   <link rel="stylesheet" href="/css/05.css">
   <link rel="stylesheet" href="/css/06.css">
-  <link rel="stylesheet" href="/css/07.css?v=20261029-comanda-numbering">
+  <link rel="stylesheet" href="/css/07.css?v=20261029-assets-cropped">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 </head>
@@ -31,7 +31,7 @@
     window.pedeiaSupabase = createClient(supabaseUrl, supabasePublishableKey);
 
     const appScript = document.createElement("script");
-    appScript.src = "/app.js?v=20261029-comanda-numbering";
+    appScript.src = "/app.js?v=20261029-assets-cropped";
     appScript.onload = () => {
       if (typeof window.bootstrap === "function") {
         window.bootstrap().catch((error) => {

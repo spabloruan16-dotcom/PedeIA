@@ -952,11 +952,11 @@ function nav(view, icon, text, count = '') {
 
 function navIcon(name) {
   if (name === 'history') {
-    return '<span class="nav-icon history-art" aria-hidden="true"><img src="/assets/historico.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon history-art" aria-hidden="true"><img src="/assets/historico.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   if (name === 'orders') {
-    return '<span class="nav-icon orders-art" aria-hidden="true"><img src="/assets/pedidos.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon orders-art" aria-hidden="true"><img src="/assets/pedidos.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   if (name === 'delivery') {
@@ -964,19 +964,19 @@ function navIcon(name) {
   }
 
   if (name === 'map') {
-    return '<span class="nav-icon map-art" aria-hidden="true"><img src="/assets/localizar-entregadores.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon map-art" aria-hidden="true"><img src="/assets/localizar-entregadores.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   if (name === 'reports') {
-    return '<span class="nav-icon reports-art" aria-hidden="true"><img src="/assets/relatorios.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon reports-art" aria-hidden="true"><img src="/assets/relatorios.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   if (name === 'promo') {
-    return '<span class="nav-icon promo-art" aria-hidden="true"><img src="/assets/promocoes.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon promo-art" aria-hidden="true"><img src="/assets/promocoes.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   if (name === 'home') {
-    return '<span class="nav-icon home-art" aria-hidden="true"><img src="/assets/visao-geral.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon home-art" aria-hidden="true"><img src="/assets/visao-geral.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   if (name === 'menu') {
@@ -984,19 +984,19 @@ function navIcon(name) {
   }
 
   if (name === 'categories') {
-    return '<span class="nav-icon categories-art" aria-hidden="true"><img src="/assets/categorias.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon categories-art" aria-hidden="true"><img src="/assets/categorias.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   if (name === 'chat') {
-    return '<span class="nav-icon chat-art" aria-hidden="true"><img src="/assets/conversas.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon chat-art" aria-hidden="true"><img src="/assets/conversas.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   if (name === 'help') {
-    return '<span class="nav-icon support-art" aria-hidden="true"><img src="/assets/suporte.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon support-art" aria-hidden="true"><img src="/assets/suporte.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   if (name === 'printers') {
-    return '<span class="nav-icon printers-art" aria-hidden="true"><img src="/assets/impressoras.png" alt="" loading="lazy" decoding="async"></span>';
+    return '<span class="nav-icon printers-art" aria-hidden="true"><img src="/assets/impressoras.png?v=20261029-assets-cropped" alt="" loading="lazy" decoding="async"></span>';
   }
 
   const paths = {
@@ -2328,7 +2328,7 @@ function showTutorial(view=state.view,force=false){
   document.body.classList.add('tutorial-lock');
   const overlay=document.createElement('div');
   overlay.className='pedeia-tutorial-overlay';
-  overlay.innerHTML=`<div class="pedeia-tutorial-backdrop"></div><section class="pedeia-tutorial-card" role="dialog" aria-modal="true" aria-labelledby="pedeia-tutorial-title" aria-describedby="pedeia-tutorial-description" tabindex="-1"><div class="pedeia-tutorial-header"><div class="pedeia-tutorial-robot" aria-hidden="true"><img src="/assets/tutorial-robot.png" alt="" loading="eager" decoding="async"></div><span class="pedeia-tutorial-kicker">GUIA RÁPIDO DA TELA</span><button type="button" class="pedeia-tutorial-close" data-tutorial-skip aria-label="Fechar tutorial">×</button></div><div class="pedeia-tutorial-progress-track"><span class="pedeia-tutorial-progress-fill"></span></div><div class="pedeia-tutorial-content"><span class="pedeia-tutorial-step-count" aria-live="polite"></span><h2 id="pedeia-tutorial-title"></h2><p id="pedeia-tutorial-description"></p><div class="pedeia-tutorial-actions"><button type="button" class="secondary-button" data-tutorial-back>Voltar</button><button type="button" class="secondary-button" data-tutorial-skip>Pular guia</button><button type="button" class="primary-button" data-tutorial-next>Próximo</button></div></div></section>`;
+  overlay.innerHTML=`<div class="pedeia-tutorial-backdrop"></div><section class="pedeia-tutorial-card" role="dialog" aria-modal="true" aria-labelledby="pedeia-tutorial-title" aria-describedby="pedeia-tutorial-description" tabindex="-1"><div class="pedeia-tutorial-header"><div class="pedeia-tutorial-robot" aria-hidden="true"><img src="/assets/tutorial-robot.png?v=20261029-assets-cropped" alt="" loading="eager" decoding="async"></div><span class="pedeia-tutorial-kicker">GUIA RÁPIDO DA TELA</span><button type="button" class="pedeia-tutorial-close" data-tutorial-skip aria-label="Fechar tutorial">×</button></div><div class="pedeia-tutorial-progress-track"><span class="pedeia-tutorial-progress-fill"></span></div><div class="pedeia-tutorial-content"><span class="pedeia-tutorial-step-count" aria-live="polite"></span><h2 id="pedeia-tutorial-title"></h2><p id="pedeia-tutorial-description"></p><div class="pedeia-tutorial-actions"><button type="button" class="secondary-button" data-tutorial-back>Voltar</button><button type="button" class="secondary-button" data-tutorial-skip>Pular guia</button><button type="button" class="primary-button" data-tutorial-next>Próximo</button></div></div></section>`;
   document.body.appendChild(overlay);
   Object.assign(overlay.style,{
     position:'fixed',
@@ -2382,7 +2382,7 @@ function showTutorial(view=state.view,force=false){
   renderStep();
   tutorialCard.focus();
 }
-function mountTutorialRobot(){if(!merchantLogged()||isAdmin)return;document.querySelector('.pedeia-tutorial-robot-fab')?.remove();const fab=document.createElement('button');fab.className='pedeia-tutorial-robot-fab';fab.type='button';fab.title='Abrir tutorial desta tela';fab.setAttribute('aria-label','Abrir tutorial desta tela');fab.innerHTML='<img src="/assets/tutorial-robot.png" alt="Robô do tutorial" loading="eager" decoding="async"><span data-tutorial-hide title="Ocultar robô até entrar novamente no site">×</span>';if(tutorialRobotHidden)return;document.body.appendChild(fab);let dragging=false,moved=false,startX=0,startY=0,left=0,top=0;const onDown=e=>{dragging=true;moved=false;const p=e.touches?.[0]||e;const r=fab.getBoundingClientRect();left=r.left;top=r.top;startX=p.clientX;startY=p.clientY;fab.setPointerCapture?.(e.pointerId);};const onMove=e=>{if(!dragging)return;const p=e.touches?.[0]||e;const dx=p.clientX-startX,dy=p.clientY-startY;if(Math.abs(dx)+Math.abs(dy)>6)moved=true;const maxLeft=Math.max(4,window.innerWidth-fab.offsetWidth-4),maxTop=Math.max(4,window.innerHeight-fab.offsetHeight-4);fab.style.left=`${Math.max(4,Math.min(maxLeft,left+dx))}px`;fab.style.top=`${Math.max(4,Math.min(maxTop,top+dy))}px`;fab.style.right='auto';fab.style.bottom='auto';};const onUp=()=>{dragging=false;};fab.addEventListener('pointerdown',onDown);fab.addEventListener('pointermove',onMove);fab.addEventListener('pointerup',onUp);fab.addEventListener('pointercancel',onUp);fab.addEventListener('click',e=>{if(moved){e.preventDefault();return;}showTutorial(state.view,true);});fab.querySelector('[data-tutorial-hide]').addEventListener('click',e=>{e.stopPropagation();tutorialRobotHidden=true;fab.remove();notify('Robô ocultado até você entrar novamente no site.');});}
+function mountTutorialRobot(){if(!merchantLogged()||isAdmin)return;document.querySelector('.pedeia-tutorial-robot-fab')?.remove();const fab=document.createElement('button');fab.className='pedeia-tutorial-robot-fab';fab.type='button';fab.title='Abrir tutorial desta tela';fab.setAttribute('aria-label','Abrir tutorial desta tela');fab.innerHTML='<img src="/assets/tutorial-robot.png?v=20261029-assets-cropped" alt="Robô do tutorial" loading="eager" decoding="async"><span data-tutorial-hide title="Ocultar robô até entrar novamente no site">×</span>';if(tutorialRobotHidden)return;document.body.appendChild(fab);let dragging=false,moved=false,startX=0,startY=0,left=0,top=0;const onDown=e=>{dragging=true;moved=false;const p=e.touches?.[0]||e;const r=fab.getBoundingClientRect();left=r.left;top=r.top;startX=p.clientX;startY=p.clientY;fab.setPointerCapture?.(e.pointerId);};const onMove=e=>{if(!dragging)return;const p=e.touches?.[0]||e;const dx=p.clientX-startX,dy=p.clientY-startY;if(Math.abs(dx)+Math.abs(dy)>6)moved=true;const maxLeft=Math.max(4,window.innerWidth-fab.offsetWidth-4),maxTop=Math.max(4,window.innerHeight-fab.offsetHeight-4);fab.style.left=`${Math.max(4,Math.min(maxLeft,left+dx))}px`;fab.style.top=`${Math.max(4,Math.min(maxTop,top+dy))}px`;fab.style.right='auto';fab.style.bottom='auto';};const onUp=()=>{dragging=false;};fab.addEventListener('pointerdown',onDown);fab.addEventListener('pointermove',onMove);fab.addEventListener('pointerup',onUp);fab.addEventListener('pointercancel',onUp);fab.addEventListener('click',e=>{if(moved){e.preventDefault();return;}showTutorial(state.view,true);});fab.querySelector('[data-tutorial-hide]').addEventListener('click',e=>{e.stopPropagation();tutorialRobotHidden=true;fab.remove();notify('Robô ocultado até você entrar novamente no site.');});}
 function initTutorialForView(){if(!merchantLogged()||isAdmin)return;mountTutorialRobot();setTimeout(()=>{if(!tutorialSeen(state.view))showTutorial(state.view,false);},250);}
 
 function bindMerchant() {
