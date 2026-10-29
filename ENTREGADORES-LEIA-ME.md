@@ -42,3 +42,6 @@ A taxa de entrega e os cupons ainda não são calculados no servidor nesta etapa
 No checkout de uma vitrine pública, o cliente recebe um link privado para acompanhar o status. A localização é exibida quando o entregador autoriza e compartilha o GPS pela página do motoboy. A página atualiza o status a cada 12 segundos; não é um canal GPS contínuo em segundo plano, pois o navegador pode suspender a página.
 
 A sequência automática de paradas por proximidade ainda depende de serviço de geocodificação/rotas e configuração de provedor. Nesta versão, o botão de rota abre os destinos atribuídos no Google Maps na ordem da lista, sem prometer otimização automática.
+
+### Mapa ao vivo do comerciante
+Na aba **Localizar entregadores**, o mapa atualiza automaticamente a cada 5 segundos enquanto o painel está aberto. Cada entregador mantém uma cor estável no mapa e na lista. O marcador só aparece depois que o entregador abre seu link no celular, ativa o GPS e concede permissão de localização; o navegador precisa permanecer aberto para continuar enviando posições.
