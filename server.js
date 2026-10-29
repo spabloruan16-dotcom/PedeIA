@@ -172,6 +172,416 @@ function readRequestJson(request) {
   });
 }
 
+function readRequestBuffer(request, limit = 2_000_000) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error("Corpo da requisicao excedeu o limite"));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+
+function whatsappSettings() {
+  const graphApiVersion = process.env.WHATSAPP_GRAPH_API_VERSION || "v25.0";
+  const encryptionKey = process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY || "";
+  const encryptionKeyValid = /^[0-9a-f]{64}$/i.test(encryptionKey);
+  const graphApiVersionValid = /^v\d+\.\d+$/.test(graphApiVersion);
+  return {
+    appId: process.env.WHATSAPP_META_APP_ID || "",
+    configId: process.env.WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID || "",
+    appSecret: process.env.WHATSAPP_META_APP_SECRET || "",
+    verifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "",
+    encryptionKey: encryptionKeyValid ? Buffer.from(encryptionKey, "hex") : null,
+    graphApiVersion,
+    configured: Boolean(
+      process.env.WHATSAPP_META_APP_ID &&
+      process.env.WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID &&
+      process.env.WHATSAPP_META_APP_SECRET &&
+      process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN &&
+      encryptionKeyValid &&
+      graphApiVersionValid
+    )
+  };
+}
+
+function encryptWhatsAppToken(token) {
+  const settings = whatsappSettings();
+  if (!settings.encryptionKey) throw new Error("WHATSAPP_TOKEN_ENCRYPTION_KEY deve ter 64 caracteres hexadecimais");
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", settings.encryptionKey, iv);
+  const ciphertext = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
+  return {
+    ciphertext: ciphertext.toString("base64"),
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64")
+  };
+}
+
+function decryptWhatsAppToken(row) {
+  const settings = whatsappSettings();
+  if (!settings.encryptionKey) throw new Error("WHATSAPP_TOKEN_ENCRYPTION_KEY nao configurada corretamente");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", settings.encryptionKey, Buffer.from(row.access_token_iv, "base64"));
+  decipher.setAuthTag(Buffer.from(row.access_token_tag, "base64"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(row.access_token_ciphertext, "base64")),
+    decipher.final()
+  ]).toString("utf8");
+}
+
+async function whatsappGraphRequest(endpoint, options = {}) {
+  const settings = whatsappSettings();
+  if (!/^v\d+\.\d+$/.test(settings.graphApiVersion)) throw new Error("WHATSAPP_GRAPH_API_VERSION invalida");
+  const url = new URL(`https://graph.facebook.com/${settings.graphApiVersion}/${endpoint.replace(/^\/+/, "")}`);
+  for (const [key, value] of Object.entries(options.query || {})) {
+    url.searchParams.set(key, String(value));
+  }
+  const headers = { Accept: "application/json" };
+  if (options.token) headers.Authorization = `Bearer ${options.token}`;
+  if (options.body) headers["Content-Type"] = "application/json";
+  const response = await fetch(url, {
+    method: options.method || "GET",
+    headers,
+    ...(options.body ? { body: JSON.stringify(options.body) } : {})
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = String(result.error?.message || result.error?.error_user_msg || "A Meta recusou a solicitacao").slice(0, 500);
+    const error = new Error(detail);
+    error.code = "WHATSAPP_META_ERROR";
+    throw error;
+  }
+  return result;
+}
+
+async function merchantWhatsAppContext(request) {
+  const user = await authenticatedUser(request);
+  if (!user) return { error: "Sessao invalida ou email nao confirmado", status: 401 };
+  if (!subscriptionPool) return { error: "Banco de dados indisponivel", status: 503 };
+  const merchant = await subscriptionPool.query(
+    "SELECT status_assinatura,fim_assinatura FROM public.comerciantes WHERE id=$1",
+    [user.id]
+  );
+  if (!merchant.rowCount) return { error: "Perfil de comerciante nao encontrado", status: 403 };
+  const subscription = merchant.rows[0];
+  if (subscription.status_assinatura !== "ativa" || (subscription.fim_assinatura && new Date(subscription.fim_assinatura).getTime() < Date.now())) {
+    return { error: "Assinatura inativa", status: 403 };
+  }
+  const shop = await subscriptionPool.query(
+    "SELECT id FROM public.lojas WHERE merchant_id=$1 ORDER BY created_at LIMIT 1",
+    [user.id]
+  );
+  if (!shop.rowCount) return { error: "Loja nao encontrada", status: 404 };
+  return { user, shopId: shop.rows[0].id };
+}
+
+function validWhatsAppWebhookSignature(rawBody, signature, appSecret) {
+  if (!signature || !appSecret || !/^sha256=[0-9a-f]{64}$/i.test(signature)) return false;
+  const expected = Buffer.from(`sha256=${crypto.createHmac("sha256", appSecret).update(rawBody).digest("hex")}`);
+  const received = Buffer.from(signature);
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+}
+
+async function handleWhatsAppWebhook(request, response) {
+  const settings = whatsappSettings();
+  if (!settings.appSecret || !settings.verifyToken) return respondJson(response, 503, { error: "Webhook do WhatsApp nao configurado" });
+  if (request.method === "GET") {
+    const mode = request.url ? new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("hub.mode") : null;
+    const token = request.url ? new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("hub.verify_token") : null;
+    const challenge = request.url ? new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("hub.challenge") : null;
+    if (mode !== "subscribe" || token !== settings.verifyToken || !challenge) {
+      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+      response.end("Forbidden");
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+    response.end(challenge);
+    return;
+  }
+  if (request.method !== "POST") return respondJson(response, 405, { error: "Metodo nao permitido" });
+  const rawBody = await readRequestBuffer(request);
+  if (!validWhatsAppWebhookSignature(rawBody, request.headers["x-hub-signature-256"], settings.appSecret)) {
+    return respondJson(response, 401, { error: "Assinatura do webhook invalida" });
+  }
+  if (!subscriptionPool) return respondJson(response, 503, { error: "Banco de dados indisponivel" });
+  let payload;
+  try {
+    payload = JSON.parse(rawBody.toString("utf8"));
+  } catch {
+    return respondJson(response, 400, { error: "JSON do webhook invalido" });
+  }
+  if (payload.object !== "whatsapp_business_account") return respondJson(response, 200, { ok: true });
+
+  for (const entry of payload.entry || []) {
+    for (const change of entry.changes || []) {
+      if (change.field !== "messages") continue;
+      const value = change.value || {};
+      const phoneNumberId = String(value.metadata?.phone_number_id || "");
+      if (!phoneNumberId) continue;
+      const connection = await subscriptionPool.query(
+        "SELECT loja_id FROM public.whatsapp_connections WHERE phone_number_id=$1 AND status='connected' LIMIT 1",
+        [phoneNumberId]
+      );
+      if (!connection.rowCount) continue;
+      const shopId = connection.rows[0].loja_id;
+
+      for (const status of value.statuses || []) {
+        if (!status.id || !["sent", "delivered", "read", "failed"].includes(status.status)) continue;
+        const detail = status.status === "failed"
+          ? String(status.errors?.[0]?.title || status.errors?.[0]?.message || "Falha no envio").slice(0, 500)
+          : null;
+        await subscriptionPool.query(
+          "UPDATE public.whatsapp_messages SET status=$2,error_detail=$3 WHERE provider_message_id=$1",
+          [status.id, status.status, detail]
+        );
+      }
+
+      for (const message of value.messages || []) {
+        const customerWaId = String(message.from || "");
+        const providerMessageId = String(message.id || "");
+        if (!customerWaId || !providerMessageId) continue;
+        const contact = (value.contacts || []).find((item) => String(item.wa_id || "") === customerWaId);
+        const messageType = String(message.type || "unsupported").slice(0, 40);
+        const content = String(
+          message.text?.body ||
+          message.button?.text ||
+          message.interactive?.button_reply?.title ||
+          message.interactive?.list_reply?.title ||
+          `[Mensagem ${messageType}]`
+        ).slice(0, 4000);
+        const timestamp = Number(message.timestamp);
+        const messageDate = Number.isFinite(timestamp) ? new Date(timestamp * 1000) : new Date();
+        const conversation = await subscriptionPool.query(
+          `INSERT INTO public.whatsapp_conversations
+             (loja_id,customer_wa_id,customer_name,last_message_at,last_customer_message_at)
+           VALUES($1,$2,$3,$4,$4)
+           ON CONFLICT (loja_id,customer_wa_id) DO UPDATE SET
+             customer_name=COALESCE(EXCLUDED.customer_name,public.whatsapp_conversations.customer_name),
+             last_message_at=GREATEST(public.whatsapp_conversations.last_message_at,EXCLUDED.last_message_at),
+             last_customer_message_at=GREATEST(COALESCE(public.whatsapp_conversations.last_customer_message_at,EXCLUDED.last_customer_message_at),EXCLUDED.last_customer_message_at),
+             updated_at=NOW()
+           RETURNING id`,
+          [shopId, customerWaId, String(contact?.profile?.name || "").slice(0, 120) || null, messageDate]
+        );
+        const inserted = await subscriptionPool.query(
+          `INSERT INTO public.whatsapp_messages(conversation_id,provider_message_id,direction,message_type,content,status,created_at)
+           VALUES($1,$2,'inbound',$3,$4,'received',$5)
+           ON CONFLICT(provider_message_id) DO NOTHING RETURNING id`,
+          [conversation.rows[0].id, providerMessageId, messageType, content, messageDate]
+        );
+        if (inserted.rowCount) {
+          await subscriptionPool.query(
+            "UPDATE public.whatsapp_conversations SET unread_count=unread_count+1,updated_at=NOW() WHERE id=$1",
+            [conversation.rows[0].id]
+          );
+        }
+      }
+    }
+  }
+  return respondJson(response, 200, { ok: true });
+}
+
+async function routeMerchantWhatsApp(request, response, pathname) {
+  const context = await merchantWhatsAppContext(request);
+  if (context.error) return respondJson(response, context.status, { error: context.error });
+  const { shopId } = context;
+  const settings = whatsappSettings();
+  if (pathname === "/api/merchant/whatsapp" && request.method === "GET") {
+    const connection = await subscriptionPool.query(
+      "SELECT phone_number_id,display_phone_number,status,connected_at FROM public.whatsapp_connections WHERE loja_id=$1 LIMIT 1",
+      [shopId]
+    );
+    const conversations = connection.rowCount
+      ? await subscriptionPool.query(
+        `SELECT c.id,c.customer_wa_id,c.customer_name,c.last_message_at,c.last_customer_message_at,c.unread_count,
+                m.content AS last_message,m.direction AS last_direction
+           FROM public.whatsapp_conversations c
+           LEFT JOIN LATERAL (
+             SELECT content,direction FROM public.whatsapp_messages
+              WHERE conversation_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1
+           ) m ON true
+          WHERE c.loja_id=$1 ORDER BY c.last_message_at DESC LIMIT 200`,
+        [shopId]
+      )
+      : { rows: [] };
+    return respondJson(response, 200, {
+      configured: settings.configured,
+      appId: settings.appId,
+      configId: settings.configId,
+      graphApiVersion: settings.graphApiVersion,
+      connected: connection.rowCount > 0 && connection.rows[0].status === "connected",
+      account: connection.rows[0] || null,
+      conversations: conversations.rows
+    });
+  }
+
+  if (pathname === "/api/merchant/whatsapp" && request.method === "DELETE") {
+    const connection = await subscriptionPool.query(
+      "SELECT waba_id,access_token_ciphertext,access_token_iv,access_token_tag FROM public.whatsapp_connections WHERE loja_id=$1 LIMIT 1",
+      [shopId]
+    );
+    if (!connection.rowCount) return respondJson(response, 404, { error: "Nenhum WhatsApp conectado a esta loja" });
+    const token = decryptWhatsAppToken(connection.rows[0]);
+    await whatsappGraphRequest(`${connection.rows[0].waba_id}/subscribed_apps`, {
+      method: "DELETE",
+      token
+    });
+    await subscriptionPool.query("DELETE FROM public.whatsapp_connections WHERE loja_id=$1", [shopId]);
+    return respondJson(response, 200, { ok: true });
+  }
+
+  if (pathname === "/api/merchant/whatsapp/connect" && request.method === "POST") {
+    if (!settings.configured || !settings.encryptionKey) {
+      return respondJson(response, 503, { error: "A integracao do WhatsApp ainda nao foi configurada no servidor" });
+    }
+    const body = await readRequestJson(request);
+    const code = String(body.code || "");
+    const wabaId = String(body.waba_id || "");
+    const phoneNumberId = String(body.phone_number_id || "");
+    const pin = String(body.pin || "");
+    if (!code || code.length > 4096 || !/^\d{6}$/.test(pin) || !/^\d{5,30}$/.test(wabaId) || !/^\d{5,30}$/.test(phoneNumberId)) {
+      return respondJson(response, 400, { error: "Dados de conexão incompletos. Confira o cadastro e o PIN de 6 dígitos." });
+    }
+    const existing = await subscriptionPool.query(
+      "SELECT phone_number_id FROM public.whatsapp_connections WHERE loja_id=$1",
+      [shopId]
+    );
+    if (existing.rowCount && existing.rows[0].phone_number_id !== phoneNumberId) {
+      return respondJson(response, 409, { error: "Desconecte o número atual antes de conectar outro WhatsApp." });
+    }
+    const otherOwner = await subscriptionPool.query(
+      "SELECT loja_id FROM public.whatsapp_connections WHERE phone_number_id=$1 AND loja_id<>$2 LIMIT 1",
+      [phoneNumberId, shopId]
+    );
+    if (otherOwner.rowCount) return respondJson(response, 409, { error: "Este número do WhatsApp já está conectado a outra loja." });
+    const exchangeUrl = new URL(`https://graph.facebook.com/${settings.graphApiVersion}/oauth/access_token`);
+    exchangeUrl.searchParams.set("client_id", settings.appId);
+    exchangeUrl.searchParams.set("client_secret", settings.appSecret);
+    exchangeUrl.searchParams.set("code", code);
+    const exchangeResponse = await fetch(exchangeUrl, { headers: { Accept: "application/json" } });
+    const exchange = await exchangeResponse.json().catch(() => ({}));
+    if (!exchangeResponse.ok || !exchange.access_token) {
+      const detail = String(exchange.error?.message || "Nao foi possivel validar a autorizacao do Meta").slice(0, 400);
+      return respondJson(response, 400, { error: detail });
+    }
+
+    if (!existing.rowCount) {
+      await whatsappGraphRequest(`${phoneNumberId}/register`, {
+        method: "POST",
+        token: exchange.access_token,
+        body: { messaging_product: "whatsapp", pin }
+      });
+    }
+    const phone = await whatsappGraphRequest(phoneNumberId, {
+      token: exchange.access_token,
+      query: { fields: "display_phone_number" }
+    });
+    await whatsappGraphRequest(`${wabaId}/subscribed_apps`, {
+      method: "POST",
+      token: exchange.access_token,
+      body: {}
+    });
+    const encrypted = encryptWhatsAppToken(exchange.access_token);
+    await subscriptionPool.query(
+      `INSERT INTO public.whatsapp_connections
+         (loja_id,waba_id,phone_number_id,display_phone_number,access_token_ciphertext,access_token_iv,access_token_tag,status,connected_at,updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,'connected',NOW(),NOW())
+       ON CONFLICT (loja_id) DO UPDATE SET
+         waba_id=EXCLUDED.waba_id,phone_number_id=EXCLUDED.phone_number_id,
+         display_phone_number=EXCLUDED.display_phone_number,
+         access_token_ciphertext=EXCLUDED.access_token_ciphertext,
+         access_token_iv=EXCLUDED.access_token_iv,access_token_tag=EXCLUDED.access_token_tag,
+         status='connected',connected_at=NOW(),updated_at=NOW()`,
+      [shopId, wabaId, phoneNumberId, String(phone.display_phone_number || "").slice(0, 40) || null, encrypted.ciphertext, encrypted.iv, encrypted.tag]
+    );
+    return respondJson(response, 200, { ok: true });
+  }
+
+  const messagesMatch = pathname.match(/^\/api\/merchant\/whatsapp\/conversations\/([0-9a-f-]{36})\/messages$/i);
+  if (messagesMatch && ["GET", "POST"].includes(request.method)) {
+    const conversationId = messagesMatch[1];
+    const connection = await subscriptionPool.query(
+      "SELECT waba_id,phone_number_id,access_token_ciphertext,access_token_iv,access_token_tag FROM public.whatsapp_connections WHERE loja_id=$1 AND status='connected' LIMIT 1",
+      [shopId]
+    );
+    if (!connection.rowCount) return respondJson(response, 409, { error: "Conecte um WhatsApp Business para abrir esta conversa" });
+    const conversation = await subscriptionPool.query(
+      "SELECT id,customer_wa_id,last_customer_message_at FROM public.whatsapp_conversations WHERE id=$1 AND loja_id=$2 LIMIT 1",
+      [conversationId, shopId]
+    );
+    if (!conversation.rowCount) return respondJson(response, 404, { error: "Conversa nao encontrada" });
+
+    if (request.method === "GET") {
+      await subscriptionPool.query("UPDATE public.whatsapp_conversations SET unread_count=0 WHERE id=$1", [conversationId]);
+      const messages = await subscriptionPool.query(
+        `SELECT id,direction,message_type,content,status,error_detail,created_at FROM (
+           SELECT id,direction,message_type,content,status,error_detail,created_at
+             FROM public.whatsapp_messages WHERE conversation_id=$1
+            ORDER BY created_at DESC,id DESC LIMIT 500
+         ) recent ORDER BY created_at ASC,id ASC`,
+        [conversationId]
+      );
+      return respondJson(response, 200, { mensagens: messages.rows });
+    }
+
+    const body = await readRequestJson(request);
+    const content = String(body.conteudo || "").trim();
+    if (!content || content.length > 2000) return respondJson(response, 400, { error: "A mensagem deve ter entre 1 e 2000 caracteres" });
+    const lastInboundAt = conversation.rows[0].last_customer_message_at
+      ? new Date(conversation.rows[0].last_customer_message_at).getTime()
+      : 0;
+    if (!lastInboundAt || Date.now() - lastInboundAt > 24 * 60 * 60 * 1000) {
+      return respondJson(response, 409, { error: "A janela de atendimento de 24 horas expirou. Para iniciar uma nova conversa, é necessário usar um modelo de mensagem aprovado pela Meta." });
+    }
+    const queued = await subscriptionPool.query(
+      `INSERT INTO public.whatsapp_messages(conversation_id,direction,message_type,content,status)
+       VALUES($1,'outbound','text',$2,'sending') RETURNING id`,
+      [conversationId, content]
+    );
+    try {
+      const token = decryptWhatsAppToken(connection.rows[0]);
+      const result = await whatsappGraphRequest(`${connection.rows[0].phone_number_id}/messages`, {
+        method: "POST",
+        token,
+        body: {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: conversation.rows[0].customer_wa_id,
+          type: "text",
+          text: { preview_url: false, body: content }
+        }
+      });
+      const providerMessageId = String(result.messages?.[0]?.id || "");
+      if (!providerMessageId) throw new Error("A Meta nao retornou o identificador da mensagem enviada");
+      const saved = await subscriptionPool.query(
+        "UPDATE public.whatsapp_messages SET provider_message_id=$2,status='sent',error_detail=NULL WHERE id=$1 RETURNING id,direction,message_type,content,status,created_at",
+        [queued.rows[0].id, providerMessageId]
+      );
+      await subscriptionPool.query(
+        "UPDATE public.whatsapp_conversations SET last_message_at=NOW(),updated_at=NOW() WHERE id=$1",
+        [conversationId]
+      );
+      return respondJson(response, 201, { mensagem: saved.rows[0] });
+    } catch (error) {
+      await subscriptionPool.query(
+        "UPDATE public.whatsapp_messages SET status='failed',error_detail=$2 WHERE id=$1",
+        [queued.rows[0].id, String(error.message || "Falha no envio").slice(0, 500)]
+      );
+      throw error;
+    }
+  }
+
+  return respondJson(response, 404, { error: "Rota do WhatsApp nao encontrada" });
+}
+
 function shopDto(row) {
   if (!row) return null;
   const schedule = row.personalizacao_vitrine?.schedule || null;
@@ -566,6 +976,25 @@ http.createServer((request, response) => {
 
   if (pathname === "/api/admin/support" || /^\/api\/admin\/support\/[0-9a-f-]{36}(?:\/messages)?$/i.test(pathname) || pathname === "/api/support" || /^\/api\/support\/[0-9a-f-]{36}\/messages$/i.test(pathname)) {
     routeSupport(request,response,pathname).catch(error=>{console.error("Falha no atendimento:",error.message);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel concluir o atendimento"});}); return;
+  }
+  if (pathname === "/api/whatsapp/webhook") {
+    handleWhatsAppWebhook(request, response).catch((error) => {
+      console.error("Falha no webhook do WhatsApp:", error.message);
+      if (!response.headersSent) respondJson(response, 500, { error: "Nao foi possivel processar o webhook do WhatsApp" });
+    });
+    return;
+  }
+  if (/^\/api\/merchant\/whatsapp(?:\/|$)/.test(pathname)) {
+    routeMerchantWhatsApp(request, response, pathname).catch((error) => {
+      console.error("Falha na integracao do WhatsApp:", error.message);
+      if (!response.headersSent) {
+        const isMetaError = error.code === "WHATSAPP_META_ERROR";
+        respondJson(response, isMetaError ? 502 : 500, {
+          error: isMetaError ? error.message : "Nao foi possivel concluir a operacao do WhatsApp"
+        });
+      }
+    });
+    return;
   }
   if (pathname === "/api/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });

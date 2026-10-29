@@ -70,6 +70,16 @@ let adminTickets = [];
 let merchantTickets = [];
 let supportThread = null;
 let merchantChatOpenId = null;
+let whatsappIntegration = { configured: false, connected: false, conversations: [] };
+let whatsappMessages = [];
+let whatsappActiveConversationId = null;
+let whatsappSignupCode = null;
+let whatsappSignupAssets = null;
+let whatsappSignupPin = '';
+let whatsappSignupInFlight = false;
+let whatsappSignupTimeout = null;
+let whatsappSdkLoading = null;
+let lastWhatsAppPoll = 0;
 let supportMessagesList = [];
 let lastAdminSupportPoll = 0;
 let lastAdminSupportStamp = null;
@@ -592,6 +602,274 @@ async function loadMerchantOrderMessages() {
   return fingerprint(currentMessages) !== fingerprint(state.messages.filter((message) => message.scope === 'order'));
 }
 
+async function loadMerchantWhatsApp() {
+  lastWhatsAppPoll = Date.now();
+  whatsappIntegration = await merchantApiRequest('/api/merchant/whatsapp');
+  if (!whatsappIntegration.connected) {
+    whatsappActiveConversationId = null;
+    whatsappMessages = [];
+  } else if (!whatsappIntegration.conversations?.some((conversation) => String(conversation.id) === String(whatsappActiveConversationId))) {
+    whatsappActiveConversationId = whatsappIntegration.conversations?.[0]?.id || null;
+  }
+  return whatsappIntegration;
+}
+
+async function loadWhatsAppMessages(conversationId) {
+  if (!conversationId) {
+    whatsappMessages = [];
+    whatsappActiveConversationId = null;
+    return;
+  }
+  const result = await merchantApiRequest(`/api/merchant/whatsapp/conversations/${encodeURIComponent(conversationId)}/messages`);
+  whatsappMessages = result.mensagens || [];
+  whatsappActiveConversationId = conversationId;
+  const conversation = whatsappIntegration.conversations?.find((item) => String(item.id) === String(conversationId));
+  if (conversation) conversation.unread_count = 0;
+}
+
+function whatsappMessageLabel(message) {
+  const labels = { sent: 'Enviada', delivered: 'Entregue', read: 'Lida', failed: 'Falha no envio', sending: 'Enviando...' };
+  return labels[message.status] || message.status || 'Recebida';
+}
+
+function whatsappPanel() {
+  const integration = whatsappIntegration || {};
+  const conversations = integration.conversations || [];
+  const active = conversations.find((item) => String(item.id) === String(whatsappActiveConversationId));
+  const lastCustomerMessage = active?.last_customer_message_at ? new Date(active.last_customer_message_at).getTime() : 0;
+  const canReply = Boolean(active && lastCustomerMessage && Date.now() - lastCustomerMessage <= 24 * 60 * 60 * 1000);
+  const conversationList = conversations.map((item) => {
+    const preview = item.last_direction === 'outbound' ? `Você: ${item.last_message || ''}` : item.last_message || 'Nova conversa';
+    return `<button type="button" class="whatsapp-thread ${String(item.id) === String(whatsappActiveConversationId) ? 'active' : ''}" data-wa-conversation="${esc(item.id)}">
+      <span class="whatsapp-thread-avatar">${esc(String(item.customer_name || item.customer_wa_id).trim().slice(0, 1).toUpperCase())}</span>
+      <span class="whatsapp-thread-copy"><strong>${esc(item.customer_name || item.customer_wa_id)}</strong><small>${esc(item.customer_wa_id)}</small><span>${esc(preview)}</span></span>
+      ${Number(item.unread_count) ? `<b class="whatsapp-unread">${Number(item.unread_count)}</b>` : ''}
+    </button>`;
+  }).join('') || '<p class="whatsapp-empty">Quando um cliente enviar uma mensagem para o número conectado, a conversa aparecerá aqui.</p>';
+  const messages = whatsappMessages.map((message) => `<article class="whatsapp-message ${message.direction === 'outbound' ? 'outbound' : 'inbound'}">
+    <p>${esc(message.content)}</p>
+    <small>${new Date(message.created_at).toLocaleString('pt-BR')} · ${esc(whatsappMessageLabel(message))}</small>
+    ${message.error_detail ? `<small class="whatsapp-message-error">${esc(message.error_detail)}</small>` : ''}
+  </article>`).join('') || '<p class="whatsapp-empty">Selecione uma conversa para ver as mensagens.</p>';
+  const setup = !integration.configured
+    ? `<div class="whatsapp-setup"><strong>Falta configurar a integração no servidor</strong><p>O administrador precisa cadastrar as variáveis do app Meta no Render e executar a migração SQL de WhatsApp.</p><span>As credenciais e tokens não devem ser enviados pelo chat nem colocados no navegador.</span></div>`
+    : !integration.connected
+      ? `<div class="whatsapp-setup"><strong>Conecte o WhatsApp Business da sua loja</strong><p>Use a janela oficial da Meta para autorizar sua conta. Crie ou informe seu PIN de confirmação de 6 dígitos durante a conexão.</p><label>PIN de registro do WhatsApp<input id="whatsapp-registration-pin" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="6 dígitos" required></label><button type="button" class="primary-button" data-wa-connect>Conectar com a Meta</button></div>`
+      : `<div class="whatsapp-connected"><span><strong>WhatsApp conectado</strong><small>${esc(integration.account?.display_phone_number || 'Número conectado à sua loja')}</small></span><button type="button" class="secondary-button" data-wa-refresh>Atualizar</button><button type="button" class="secondary-button" data-wa-disconnect>Desconectar</button></div>
+        <div class="whatsapp-inbox">
+          <aside class="whatsapp-thread-list">${conversationList}</aside>
+          <section class="whatsapp-thread-panel">
+            ${active ? `<header><strong>${esc(active.customer_name || active.customer_wa_id)}</strong><small>${esc(active.customer_wa_id)}</small></header>` : '<header><strong>Caixa de entrada</strong><small>Escolha uma conversa para começar</small></header>'}
+            <div class="whatsapp-messages">${messages}</div>
+            ${active ? canReply
+              ? `<form class="whatsapp-compose" data-wa-compose="${esc(active.id)}"><input name="conteudo" required maxlength="2000" placeholder="Escreva uma mensagem"><button type="submit">Enviar</button></form>`
+              : '<p class="whatsapp-window-notice">A janela de atendimento de 24 horas terminou. Para enviar uma nova mensagem, será necessário usar um modelo aprovado pela Meta.</p>'
+              : ''}
+          </section>
+        </div>`;
+  return `<section class="whatsapp-panel panel">
+    <div class="whatsapp-panel-heading"><div><p class="eyebrow">WHATSAPP BUSINESS</p><h2>Mensagens pelo WhatsApp</h2><p>Conecte o número da sua loja para receber e responder clientes nesta caixa de entrada.</p></div></div>
+    ${setup}
+  </section>`;
+}
+
+function loadFacebookSdk() {
+  if (window.FB) return Promise.resolve(window.FB);
+  if (whatsappSdkLoading) return whatsappSdkLoading;
+  whatsappSdkLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://connect.facebook.net/pt_BR/sdk.js';
+    script.async = true;
+    script.defer = true;
+    window.fbAsyncInit = () => {
+      try {
+        window.FB.init({
+          appId: whatsappIntegration.appId,
+          xfbml: false,
+          version: whatsappIntegration.graphApiVersion
+        });
+        resolve(window.FB);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    script.onerror = () => reject(new Error('Não foi possível carregar o SDK oficial da Meta.'));
+    document.head.appendChild(script);
+  }).catch((error) => {
+    whatsappSdkLoading = null;
+    throw error;
+  });
+  return whatsappSdkLoading;
+}
+
+function bindWhatsAppSignupMessage() {
+  if (window.pedeiaWhatsAppSignupListener) return;
+  window.pedeiaWhatsAppSignupListener = true;
+  window.addEventListener('message', (event) => {
+    let hostname = '';
+    try { hostname = new URL(event.origin).hostname.toLowerCase(); } catch { return; }
+    if (hostname !== 'facebook.com' && !hostname.endsWith('.facebook.com')) return;
+    let payload;
+    try { payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; } catch { return; }
+    if (payload?.type !== 'WA_EMBEDDED_SIGNUP') return;
+    if (!['FINISH', 'FINISH_ONLY_WABA'].includes(payload.event)) return;
+    const data = payload.data || {};
+    const phoneNumberId = String(data.phone_number_id || '');
+    const wabaId = String(data.waba_id || data.waba_ids?.[0] || '');
+    if (!phoneNumberId || !wabaId) {
+      notify('A Meta não retornou o número ou a conta do WhatsApp. Tente conectar novamente.');
+      whatsappSignupCode = null;
+      whatsappSignupAssets = null;
+      window.clearTimeout(whatsappSignupTimeout);
+      whatsappSignupTimeout = null;
+      const connectButton = document.querySelector('[data-wa-connect]');
+      if (connectButton) connectButton.disabled = false;
+      return;
+    }
+    whatsappSignupAssets = { phone_number_id: phoneNumberId, waba_id: wabaId };
+    completeWhatsAppSignup();
+  });
+}
+
+async function completeWhatsAppSignup() {
+  if (whatsappSignupInFlight || !whatsappSignupCode || !whatsappSignupAssets) return;
+  whatsappSignupInFlight = true;
+  try {
+    await merchantApiRequest('/api/merchant/whatsapp/connect', 'POST', {
+      ...whatsappSignupAssets,
+      code: whatsappSignupCode,
+      pin: whatsappSignupPin
+    });
+    whatsappSignupCode = null;
+    whatsappSignupAssets = null;
+    whatsappSignupPin = '';
+    window.clearTimeout(whatsappSignupTimeout);
+    whatsappSignupTimeout = null;
+    notify('WhatsApp conectado à sua loja.');
+    await loadMerchantWhatsApp();
+    renderSaved();
+  } catch (error) {
+    notify(error.message || 'Não foi possível concluir a conexão com a Meta.');
+  } finally {
+    whatsappSignupInFlight = false;
+    document.querySelector('[data-wa-connect]')?.removeAttribute('disabled');
+    window.clearTimeout(whatsappSignupTimeout);
+    whatsappSignupTimeout = null;
+  }
+}
+
+function bindWhatsApp() {
+  document.querySelector('[data-wa-connect]')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const pinInput = document.querySelector('#whatsapp-registration-pin');
+    const pin = String(pinInput?.value || '').trim();
+    if (!/^\d{6}$/.test(pin)) {
+      notify('Informe um PIN de 6 dígitos para registrar o número.');
+      pinInput?.focus();
+      return;
+    }
+    button.disabled = true;
+    whatsappSignupPin = pin;
+    whatsappSignupCode = null;
+    whatsappSignupAssets = null;
+    try {
+      bindWhatsAppSignupMessage();
+      const facebook = await loadFacebookSdk();
+      whatsappSignupTimeout = window.setTimeout(() => {
+        if (whatsappSignupInFlight || (whatsappSignupCode && whatsappSignupAssets)) return;
+        whatsappSignupCode = null;
+        whatsappSignupAssets = null;
+        whatsappSignupPin = '';
+        const connectButton = document.querySelector('[data-wa-connect]');
+        if (connectButton) connectButton.disabled = false;
+        notify('O cadastro da Meta expirou antes de concluir. Inicie a conexão novamente.');
+      }, 90000);
+      facebook.login((result) => {
+        const code = String(result?.authResponse?.code || '');
+        if (!code) {
+          notify('A conexão foi cancelada ou a Meta não retornou autorização.');
+          button.disabled = false;
+          window.clearTimeout(whatsappSignupTimeout);
+          whatsappSignupTimeout = null;
+          return;
+        }
+        whatsappSignupCode = code;
+        completeWhatsAppSignup();
+      }, {
+        config_id: whatsappIntegration.configId,
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: { setup: {} }
+      });
+    } catch (error) {
+      notify(error.message || 'Não foi possível iniciar o cadastro pela Meta.');
+      button.disabled = false;
+    }
+  });
+
+  document.querySelector('[data-wa-refresh]')?.addEventListener('click', async () => {
+    try {
+      await loadMerchantWhatsApp();
+      if (whatsappActiveConversationId) await loadWhatsAppMessages(whatsappActiveConversationId);
+      renderSaved();
+    } catch (error) {
+      notify(error.message || 'Não foi possível atualizar as conversas.');
+    }
+  });
+
+  document.querySelector('[data-wa-disconnect]')?.addEventListener('click', async () => {
+    if (!window.confirm('Desconectar o WhatsApp desta loja? As mensagens já recebidas permanecerão salvas no painel.')) return;
+    try {
+      await merchantApiRequest('/api/merchant/whatsapp', 'DELETE');
+      whatsappActiveConversationId = null;
+      whatsappMessages = [];
+      await loadMerchantWhatsApp();
+      renderSaved();
+      notify('WhatsApp desconectado.');
+    } catch (error) {
+      notify(error.message || 'Não foi possível desconectar o WhatsApp.');
+    }
+  });
+
+  document.querySelectorAll('[data-wa-conversation]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try {
+        await loadWhatsAppMessages(button.dataset.waConversation);
+        renderSaved();
+      } catch (error) {
+        notify(error.message || 'Não foi possível carregar esta conversa.');
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-wa-compose]').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = form.querySelector('button[type="submit"]');
+      const content = String(new FormData(form).get('conteudo') || '').trim();
+      if (!content) return;
+      button.disabled = true;
+      try {
+        await merchantApiRequest(`/api/merchant/whatsapp/conversations/${encodeURIComponent(form.dataset.waCompose)}/messages`, 'POST', { conteudo: content });
+        await loadMerchantWhatsApp();
+        await loadWhatsAppMessages(form.dataset.waCompose);
+        renderSaved();
+      } catch (error) {
+        try {
+          await loadMerchantWhatsApp();
+          await loadWhatsAppMessages(form.dataset.waCompose);
+          renderSaved();
+        } catch (refreshError) {
+          console.error('Falha ao atualizar conversa após erro de envio:', refreshError.message);
+        }
+        notify(error.message || 'Não foi possível enviar a mensagem.');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+}
+
 async function courierRequest(path,method='GET',body){return merchantApiRequest(path,method,body);}
 async function loadCouriers(){const r=await courierRequest('/api/merchant/couriers');merchantCouriers=r.entregadores||[];couriersLoaded=true;}
 function couriersView(){return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA DA LOJA</p><h1>Central de entregadores</h1><p class="intro-copy">Cadastre motoboys, compartilhe o acesso individual e organize as entregas por uma rota otimizada.</p></div><div class="courier-actions"><button class="secondary-button" data-courier-refresh>Atualizar</button><button class="primary-button" data-optimize-route>Otimizar rota dos pedidos</button></div></section>${optimizedRoute?`<section class="panel route-result"><div class="panel-heading"><div><h2>Rota otimizada</h2><p>${optimizedRoute.provider==='openrouteservice'?'Rota calculada pelo OpenRouteService.':'Endereços geocodificados; ordem original mantida até configurar ORS.'}</p></div>${optimizedRoute.mapUrl?`<a class="secondary-button" target="_blank" rel="noopener" href="${esc(optimizedRoute.mapUrl)}">Abrir mapa</a>`:''}</div><ol>${(optimizedRoute.optimized||[]).map(x=>`<li><strong>${esc(x.label||'Pedido')}</strong><small>${esc(x.address||'')}</small></li>`).join('')}</ol></section>`:''}<section class="panel courier-panel"><div class="panel-heading"><div><h2>Cadastrar motoboy</h2><p>O link de acesso é exibido uma única vez ao criar ou renovar.</p></div></div><form id="courier-create-form" class="courier-form"><label>Nome completo<input name="nome" required maxlength="120" placeholder="Nome do entregador"></label><label>Telefone<input name="telefone" maxlength="40" placeholder="(00) 00000-0000"></label><label>Veículo<input name="veiculo" maxlength="80" placeholder="Moto, placa opcional"></label><button class="primary-button" type="submit">Cadastrar e gerar link</button></form>${newlyCreatedCourierLink?`<div class="courier-link-notice"><strong>Link individual criado</strong><input readonly value="${esc(newlyCreatedCourierLink)}" id="courier-generated-link"><button type="button" class="secondary-button" data-courier-copy>Copiar link</button><small>Guarde este link e envie apenas ao entregador. Se perdê-lo, desative este cadastro e crie outro.</small></div>`:''}</section><section class="courier-list">${merchantCouriers.map(c=>`<article class="panel courier-card"><div class="courier-card-top"><div><strong>${esc(c.nome)}</strong><small>${esc(c.telefone||'Sem telefone')} ${c.veiculo?'· '+esc(c.veiculo):''}</small></div><span class="courier-state ${c.ativo?'active':'inactive'}">${c.ativo?'Ativo':'Desativado'}</span></div><p>${Number(c.pedidos_ativos||0)} pedido(s) ativo(s)</p><div class="courier-today-summary"><strong>${Number(c.entregas_hoje||0)} entregas hoje</strong><span>Taxas do dia: ${money(Number(c.ganhos_hoje||0))}</span></div><div class="courier-actions"><button class="secondary-button" data-courier-history="${c.id}">Histórico de entregas</button><button class="secondary-button" data-courier-copy-link="${c.id}" ${!c.ativo?'disabled':''}>Copiar link</button><button class="secondary-button" data-courier-toggle="${c.id}" data-active="${c.ativo?'true':'false'}">${c.ativo?'Desativar':'Ativar'}</button><button class="secondary-button" data-courier-delete="${c.id}">Excluir</button></div></article>`).join('')||'<div class="panel"><p>Nenhum entregador cadastrado ainda.</p></div>'}</section>${courierHistoryId?`<section class="panel courier-history-panel"><div class="panel-heading"><div><h2>Histórico de ${esc(merchantCouriers.find(c=>c.id===courierHistoryId)?.nome||'entregador')}</h2><p>Entregas concluídas e taxas registradas.</p></div><button class="secondary-button" data-courier-history-close>Fechar</button></div><div class="courier-history-list">${courierHistoryRows.map(h=>`<article class="courier-history-row"><div><strong>Pedido ${esc(String(h.numero_comanda||1).padStart(4,'0'))}</strong><small>${new Date(h.concluida_em).toLocaleString('pt-BR')} · ${esc(h.endereco||'Endereço não informado')}</small></div><strong>${money(Number(h.taxa_recebida||0))}</strong></article>`).join('')||'<p class="admin-empty">Nenhuma entrega concluída registrada.</p>'}</div></section>`:''}<section class="panel courier-note"><strong>Sobre as rotas</strong><p>O motoboy acessa seus pedidos por um link protegido. A rota abre no Google Maps com os endereços atribuídos. A otimização usa as coordenadas dos pedidos e do endereço da loja. O rastreamento GPS do entregador depende da permissão de localização do navegador.</p></section>`;}
@@ -713,7 +991,15 @@ function startLiveRefresh() {
     merchantRefreshInFlight = true;
     try {
       await refreshMerchantOrders();
-      if (state.view === 'chat' && await loadMerchantOrderMessages()) render();
+      if (state.view === 'chat') {
+        const orderMessagesChanged = await loadMerchantOrderMessages();
+        const refreshWhatsApp = Date.now() - lastWhatsAppPoll >= 15000;
+        if (refreshWhatsApp) {
+          await loadMerchantWhatsApp();
+          if (whatsappActiveConversationId) await loadWhatsAppMessages(whatsappActiveConversationId);
+        }
+        if (orderMessagesChanged || refreshWhatsApp) render();
+      }
     } catch (error) {
       console.error('Falha ao atualizar pedidos e conversas:', error.message);
     } finally {
@@ -1031,11 +1317,13 @@ function activeOrders() {
 function unreadMessagesCount(type = 'merchant') {
   if (type === 'merchant') {
     const activeIds = new Set(activeOrders().map((order) => String(order.id)));
-    return state.messages.filter((msg) =>
+    const orderUnread = state.messages.filter((msg) =>
       msg.scope === 'order' &&
       msg.from !== 'merchant' &&
       activeIds.has(String(msg.orderId))
     ).length;
+    const whatsappUnread = (whatsappIntegration.conversations || []).reduce((total, conversation) => total + Number(conversation.unread_count || 0), 0);
+    return orderUnread + whatsappUnread;
   }
   return state.messages.filter((msg) => msg.scope === 'store' && msg.from === 'merchant').length;
 }
@@ -1094,9 +1382,26 @@ function reportsView(){
   return `<section class="page-intro report-intro"><div><p class="eyebrow">DESEMPENHO DA LOJA</p><h1>Relatórios</h1><p class="intro-copy">Painel visual para acompanhar vendas, produtos e operação sem deixar tudo aberto ao mesmo tempo.</p></div><button class="secondary-button" data-report-refresh ${reportLoading?'disabled':''}>Atualizar</button></section><nav class="report-tabs" aria-label="Seções de relatórios">${tabButtons}</nav>${filters}${kpiHtml}<div class="report-tab-content">${body}</div>`;
 }
 function promotionsView(){
- const rows=promoRows||[]; return `<section class="page-intro"><div><p class="eyebrow">VENDAS E OFERTAS</p><h1>Promoções</h1><p class="intro-copy">Crie descontos automáticos por produto, categoria ou loja, inclusive ofertas relâmpago.</p></div><button class="secondary-button" data-promo-refresh>Atualizar</button></section>
- <section class="panel promo-create"><h2>Criar promoção</h2><form id="promo-form"><div class="form-grid"><label>Nome<input name="nome" required maxlength="160" placeholder="Ex.: Sexta do hambúrguer"></label><label>Tipo<select name="tipo"><option value="percentual">Desconto percentual</option><option value="valor_fixo">Desconto em R$</option><option value="preco_promocional">Preço promocional</option><option value="compre_x_pague_y">Compre X, pague Y</option></select></label><label>Escopo<select name="escopo"><option value="loja">Toda a loja</option><option value="produto">Produto</option><option value="categoria">Categoria</option></select></label><label>Valor<input name="valor" type="number" min="0" step="0.01" value="10"></label><label>Quantidade X<input name="quantidade_x" type="number" min="1" value="2"></label><label>Quantidade Y<input name="quantidade_y" type="number" min="1" value="1"></label><label>Início<input name="inicio" type="datetime-local"></label><label>Fim<input name="fim" type="datetime-local"></label><label>Limite total<input name="limite_total" type="number" min="1"></label><label>Limite por cliente<input name="limite_por_cliente" type="number" min="1"></label></div><label>Produtos (quando escopo = produto)<select name="produtos" multiple size="5">${reportOptions.produtos.map(x=>`<option value="${x.id}">${esc(x.nome)} · ${reportMoney(x.preco)}</option>`).join('')}</select></label><label>Categorias (quando escopo = categoria)<select name="categorias" multiple size="5">${reportOptions.categorias.map(x=>`<option value="${x.id}">${esc(x.nome)}</option>`).join('')}</select></label><button class="primary-button">Salvar promoção</button></form></section>
- <section class="promo-list">${rows.map(x=>`<article class="panel promo-card"><div><strong>${esc(x.nome)}</strong><small>${esc(x.tipo)} · ${esc(x.escopo)} · ${new Date(x.inicio).toLocaleString('pt-BR')} ${x.fim?'até '+new Date(x.fim).toLocaleString('pt-BR'):''}</small><p>${x.ativa?'Ativa':'Pausada'} · ${x.usos||0}${x.limite_total?' / '+x.limite_total:''} uso(s)</p></div><div><strong>${x.tipo==='percentual'?Number(x.valor).toLocaleString('pt-BR')+'%':reportMoney(x.valor)}</strong><button class="secondary-button" data-promo-toggle="${x.id}" data-active="${x.ativa?'true':'false'}">${x.ativa?'Pausar':'Ativar'}</button><button class="secondary-button" data-promo-delete="${x.id}">Excluir</button></div></article>`).join('')||'<div class="panel"><p>Nenhuma promoção cadastrada.</p></div>'}</section>`;
+ const rows=promoRows||[];
+ const activeCount=rows.filter(p=>p.ativa).length;
+ const totalUses=rows.reduce((sum,p)=>sum+Math.max(0,Number(p.usos)||0),0);
+ const typeLabels={percentual:'Desconto percentual',valor_fixo:'Desconto em reais',preco_promocional:'Preço promocional',compre_x_pague_y:'Compre X, pague Y'};
+ const scopeLabels={loja:'Toda a loja',produto:'Produtos selecionados',categoria:'Categorias selecionadas'};
+ const formatDate=value=>{const date=value?new Date(value):null;return date&&!Number.isNaN(date.getTime())?date.toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'Sem data definida';};
+ const promoValue=p=>p.tipo==='percentual'?`${Number(p.valor||0).toLocaleString('pt-BR')}%`:p.tipo==='compre_x_pague_y'?`Compre ${Number(p.quantidade_x||2)} · pague ${Number(p.quantidade_y||1)}`:reportMoney(p.valor||0);
+ const promotionCards=rows.map(p=>{
+  const uses=Math.max(0,Number(p.usos)||0),limit=Math.max(0,Number(p.limite_total)||0);
+  const progress=limit?Math.min(100,Math.round(uses/limit*100)):0;
+  const dateRange=`${formatDate(p.inicio)}${p.fim?` até ${formatDate(p.fim)}`:' · sem data final'}`;
+  return `<article class="promo-card ${p.ativa?'is-active':'is-paused'}"><div class="promo-card-main"><div class="promo-card-title"><span class="promo-status ${p.ativa?'is-active':'is-paused'}"><i></i>${p.ativa?'Ativa':'Pausada'}</span><span class="promo-type">${esc(typeLabels[p.tipo]||p.tipo||'Promoção')}</span></div><h3>${esc(p.nome||'Promoção sem nome')}</h3><p class="promo-card-scope">${esc(scopeLabels[p.escopo]||p.escopo||'Toda a loja')}</p><div class="promo-card-dates"><span aria-hidden="true">◷</span>${esc(dateRange)}</div>${limit?`<div class="promo-usage"><div class="promo-usage-label"><span>Utilizações</span><strong>${uses} de ${limit}</strong></div><div class="promo-usage-track"><i style="width:${progress}%"></i></div></div>`:`<div class="promo-card-uses">${uses} utilização(ões) · sem limite total</div>`}</div><div class="promo-card-side"><strong class="promo-value">${esc(promoValue(p))}</strong><div class="promo-card-actions"><button type="button" class="secondary-button" data-promo-toggle="${esc(p.id)}" data-active="${p.ativa?'true':'false'}">${p.ativa?'Pausar':'Ativar'}</button><button type="button" class="promo-delete-button" data-promo-delete="${esc(p.id)}" aria-label="Excluir promoção ${esc(p.nome||'')}">Excluir</button></div></div></article>`;
+ }).join('');
+ return `<section class="page-intro promo-page-intro"><div><p class="eyebrow">VENDAS E OFERTAS</p><h1>Promoções</h1><p class="intro-copy">Crie ofertas para toda a loja, produtos ou categorias e acompanhe os resultados em um só lugar.</p></div><div class="promo-page-actions"><button type="button" class="secondary-button" data-promo-refresh>Atualizar</button><button type="button" class="primary-button" data-promo-create>+ Nova promoção</button></div></section>
+ <section class="promo-summary" aria-label="Resumo das promoções"><article><span class="promo-summary-icon">✦</span><div><small>Ofertas criadas</small><strong>${rows.length}</strong></div></article><article><span class="promo-summary-icon is-green">✓</span><div><small>Ativas agora</small><strong>${activeCount}</strong></div></article><article><span class="promo-summary-icon is-orange">↗</span><div><small>Utilizações</small><strong>${totalUses}</strong></div></article></section>
+ <section class="promo-workspace" id="promotion-creator"><div class="promo-create panel"><div class="promo-section-heading"><div><span class="promo-step">01</span><div><p class="eyebrow">MONTE SUA OFERTA</p><h2>Nova promoção</h2><p>Defina o benefício, onde ele vale e por quanto tempo.</p></div></div><span class="promo-required-note">* Campos obrigatórios</span></div><form id="promo-form"><section class="promo-form-section"><div class="promo-form-section-heading"><span>1</span><div><h3>Identificação e benefício</h3><p>Escolha um nome fácil de reconhecer e como o desconto será aplicado.</p></div></div><div class="promo-form-grid promo-form-grid-primary"><label class="promo-field-wide">Nome da promoção <em>*</em><input name="nome" required maxlength="160" placeholder="Ex.: Sexta do hambúrguer"></label><label>Tipo de benefício<select name="tipo" data-promo-type><option value="percentual">Desconto percentual</option><option value="valor_fixo">Desconto em reais</option><option value="preco_promocional">Preço promocional</option><option value="compre_x_pague_y">Compre X, pague Y</option></select></label><label class="promo-field-value">Valor do benefício<input name="valor" type="number" min="0" step="0.01" value="10" data-promo-value><small data-promo-value-hint>Percentual de desconto aplicado ao pedido.</small></label><div class="promo-quantity-fields" data-promo-quantities hidden><label>Leve<input name="quantidade_x" type="number" min="1" value="2"></label><label>Pague<input name="quantidade_y" type="number" min="1" value="1"></label></div></div></section>
+ <section class="promo-form-section"><div class="promo-form-section-heading"><span>2</span><div><h3>Onde a promoção vale?</h3><p>Selecione a loja inteira ou limite a oferta a itens específicos.</p></div></div><div class="promo-form-grid"><label>Aplicar em<select name="escopo" data-promo-scope><option value="loja">Toda a loja</option><option value="produto">Produtos selecionados</option><option value="categoria">Categorias selecionadas</option></select></label><label>Limite total de usos <small>Deixe vazio para não limitar.</small><input name="limite_total" type="number" min="1" placeholder="Ilimitado"></label><label>Limite por cliente <small>Deixe vazio para não limitar.</small><input name="limite_por_cliente" type="number" min="1" placeholder="Ilimitado"></label><div class="promo-target-panel" data-promo-target="produto" hidden><label>Produtos da oferta <em>*</em><select name="produtos" multiple size="4" data-promo-products>${reportOptions.produtos.map(p=>`<option value="${esc(p.id)}">${esc(p.nome)} · ${reportMoney(p.preco)}</option>`).join('')}</select><small>Use Ctrl (Windows) ou Command (Mac) para selecionar mais de um.</small></label></div><div class="promo-target-panel" data-promo-target="categoria" hidden><label>Categorias da oferta <em>*</em><select name="categorias" multiple size="4" data-promo-categories>${reportOptions.categorias.map(c=>`<option value="${esc(c.id)}">${esc(c.nome)}</option>`).join('')}</select><small>Você pode combinar mais de uma categoria.</small></label></div></div></section>
+ <section class="promo-form-section"><div class="promo-form-section-heading"><span>3</span><div><h3>Agendamento</h3><p>Programe a validade. Sem datas, a promoção fica disponível conforme o status selecionado.</p></div></div><div class="promo-form-grid"><label>Início<input name="inicio" type="datetime-local"></label><label>Fim<input name="fim" type="datetime-local"></label></div></section><div class="promo-form-footer"><p>Você poderá pausar ou reativar a promoção a qualquer momento.</p><button class="primary-button" type="submit">Criar promoção</button></div></form></div>
+ <aside class="promo-preview-column"><article class="promo-live-preview"><div class="promo-preview-top"><span class="promo-preview-spark">✦</span><span>PRÉVIA DA OFERTA</span></div><div class="promo-preview-badge">OFERTA ESPECIAL</div><h3 data-promo-preview-name>Sua promoção</h3><strong data-promo-preview-value>-10%</strong><p data-promo-preview-scope>Válida para toda a loja</p><div class="promo-preview-footer"><span>Visualização ao vivo</span><span class="promo-preview-dot"></span></div></article><div class="promo-tip"><span>✦</span><div><strong>Dica para vender mais</strong><p>Crie ofertas com prazo definido para incentivar uma decisão rápida.</p></div></div></aside></section>
+ <section class="promo-management"><div class="promo-list-heading"><div><p class="eyebrow">ACOMPANHAMENTO</p><h2>Suas promoções</h2><p>Ative, pause ou confira o uso das ofertas cadastradas.</p></div><span class="promo-count">${rows.length} ${rows.length===1?'oferta':'ofertas'}</span></div><div class="promo-list">${promotionCards||'<article class="promo-empty"><span>✦</span><h3>Suas próximas vendas começam com uma oferta</h3><p>Crie uma promoção para destacar produtos, categorias ou a loja inteira.</p><button type="button" class="primary-button" data-promo-create>+ Criar primeira promoção</button></article>'}</div></section>`;
 }
 function courierMapView(){
  const withGps=courierLocations.filter(hasCourierGps);
@@ -1801,9 +2106,11 @@ function chatView() {
       <div>
         <p class="eyebrow">CONVERSE COM QUEM PEDIU</p>
         <h1>Conversas</h1>
-        <p class="intro-copy">As conversas ficam disponíveis para consulta mesmo depois que o pedido é encerrado.</p>
+        <p class="intro-copy">Atenda pelo WhatsApp da sua loja e consulte também as conversas vinculadas aos pedidos.</p>
       </div>
     </section>
+
+    ${whatsappPanel()}
 
     <section class="chat-toolbar panel">
       <div class="chat-filter-group" aria-label="Tipo de pedido">
@@ -2311,7 +2618,7 @@ const TUTORIALS={
   orders:[['Central de pedidos','Veja os pedidos recebidos e abra um cartão para conferir os detalhes.'],['Atualize o andamento','Use as ações do pedido para avançar o preparo e informar o cliente.'],['Acompanhe em tempo real','Os pedidos e as mudanças de status são atualizados automaticamente.']],
   history:[['Histórico de pedidos','Consulte pedidos já concluídos ou cancelados.'],['Encontre um pedido','Combine período, forma de recebimento e busca para localizar um registro.']],
   couriers:[['Equipe de entrega','Cadastre entregadores e mantenha os dados de cada um organizados.'],['Compartilhe o acesso','Copie o link individual para o entregador acompanhar suas entregas.'],['Acompanhe a operação','Consulte entregas concluídas e localização quando o GPS estiver disponível.']],
-  chat:[['Conversas com clientes','Encontre aqui as mensagens vinculadas aos pedidos da loja.'],['Abra para responder','Selecione uma conversa para ler o histórico e responder enquanto o pedido estiver ativo.']],
+  chat:[['WhatsApp da loja','Conecte seu número oficial para receber mensagens dos clientes na caixa de entrada.'],['Conversas de pedidos','As mensagens vinculadas a pedidos continuam disponíveis abaixo e podem ser respondidas enquanto o pedido estiver ativo.']],
   support:[['Suporte da plataforma','Use esta área para conversar com a equipe de suporte.'],['Abra um atendimento','Descreva sua dúvida para iniciar um chamado.'],['Envie anexos','Inclua imagens ou PDFs para explicar melhor o problema.']],
   printers:[['Impressoras','Configure as impressoras usadas para os pedidos.'],['Faça um teste','Confira a impressão antes de ativar a impressão automática.']],
   menu:[['Cardápio digital','Cadastre produtos, preços, descrições e disponibilidade.'],['Opções e adicionais','Configure escolhas e adicionais para personalizar os produtos.']],
@@ -2390,6 +2697,7 @@ function mountTutorialRobot(){if(!merchantLogged()||isAdmin)return;document.quer
 function initTutorialForView(){if(!merchantLogged()||isAdmin)return;mountTutorialRobot();setTimeout(()=>{if(!tutorialSeen(state.view))showTutorial(state.view,false);},250);}
 
 function bindMerchant() {
+  bindWhatsApp();
   const menuToggle = document.querySelector('.mobile-menu-toggle');
   const sideNav = document.querySelector('.side-nav');
   const menuBackdrop = document.querySelector('[data-menu-backdrop]');
@@ -2415,7 +2723,7 @@ function bindMerchant() {
       setMobileMenuOpen(false);
       state.view = button.dataset.view;
       if(state.view==='support'){try{await loadMerchantTickets();supportThread=merchantTickets[0]?.id||null;if(supportThread){const r=await supportRequest(`/api/support/${supportThread}/messages`);supportMessagesList=await Promise.all((r.mensagens||[]).map(async m=>({...m,signedUrl:await signedSupportUrl(m.anexo_url)})));}}catch(e){notify(e.message);}}
-      if(state.view==='chat'){try{await loadMerchantOrderMessages();}catch(e){notify(e.message||'Não foi possível carregar as conversas.');}}
+      if(state.view==='chat'){try{await loadMerchantOrderMessages();await loadMerchantWhatsApp();if(whatsappIntegration.configured){try{await loadFacebookSdk();}catch(sdkError){notify(sdkError.message||'Não foi possível carregar o SDK da Meta.');}}if(whatsappActiveConversationId)await loadWhatsAppMessages(whatsappActiveConversationId);}catch(e){notify(e.message||'Não foi possível carregar as conversas.');}}
       if(state.view==='couriers'){try{await loadCouriers();}catch(e){notify(e.message);}}
       if(state.view==='reports'){await loadReports(); return;}
       if(state.view==='promotions'){if(!promoLoaded) await loadPromotions();} 
@@ -2440,6 +2748,49 @@ function bindMerchant() {
   document.querySelector('[data-courier-locations-refresh]')?.addEventListener('click',loadCourierLocations);
   if(state.view==='courierMap'){setTimeout(initCourierMap,0);}
   document.querySelector('[data-promo-refresh]')?.addEventListener('click',async()=>{await loadPromotions();renderSaved();});
+  const promoForm=document.querySelector('#promo-form');
+  if(promoForm){
+    const promoType=promoForm.elements.tipo;
+    const promoScope=promoForm.elements.escopo;
+    const promoValue=promoForm.elements.valor;
+    const promoName=promoForm.elements.nome;
+    const promoQuantityFields=promoForm.querySelector('[data-promo-quantities]');
+    const promoValueField=promoForm.querySelector('.promo-field-value');
+    const updatePromoEditor=()=>{
+      const buyXPayY=promoType.value==='compre_x_pague_y';
+      const scope=promoScope.value;
+      promoQuantityFields.hidden=!buyXPayY;
+      promoValueField.hidden=buyXPayY;
+      promoForm.querySelectorAll('[data-promo-target]').forEach(target=>{
+        const selected=target.dataset.promoTarget===scope;
+        const select=target.querySelector('select');
+        target.hidden=!selected;
+        if(select)select.required=selected;
+      });
+      const name=promoName.value.trim()||'Sua promoção';
+      const value=Number(promoValue.value||0);
+      const formattedValue=buyXPayY
+        ?`Compre ${Number(promoForm.elements.quantidade_x.value||2)} · pague ${Number(promoForm.elements.quantidade_y.value||1)}`
+        :promoType.value==='percentual'
+          ?`-${value.toLocaleString('pt-BR')}%`
+          :promoType.value==='preco_promocional'
+            ?`Por ${reportMoney(value)}`
+            :`-${reportMoney(value)}`;
+      const scopeText={loja:'Válida para toda a loja',produto:'Válida para os produtos selecionados',categoria:'Válida para as categorias selecionadas'};
+      document.querySelector('[data-promo-preview-name]').textContent=name;
+      document.querySelector('[data-promo-preview-value]').textContent=formattedValue;
+      document.querySelector('[data-promo-preview-scope]').textContent=scopeText[scope]||scopeText.loja;
+      const hint=promoForm.querySelector('[data-promo-value-hint]');
+      if(hint)hint.textContent=promoType.value==='percentual'?'Percentual de desconto aplicado ao pedido.':promoType.value==='preco_promocional'?'Preço final promocional do item.':'Valor em reais descontado do pedido.';
+    };
+    promoForm.addEventListener('input',updatePromoEditor);
+    promoForm.addEventListener('change',updatePromoEditor);
+    updatePromoEditor();
+  }
+  document.querySelectorAll('[data-promo-create]').forEach(button=>button.addEventListener('click',()=>{
+    document.querySelector('#promotion-creator')?.scrollIntoView({behavior:'smooth',block:'start'});
+    window.setTimeout(()=>document.querySelector('#promo-form [name="nome"]')?.focus(),300);
+  }));
   document.querySelector('#promo-form')?.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{await merchantRequest('/api/merchant/promotions','POST',{nome:fd.get('nome'),tipo:fd.get('tipo'),escopo:fd.get('escopo'),valor:Number(fd.get('valor')||0),quantidade_x:Number(fd.get('quantidade_x')||0),quantidade_y:Number(fd.get('quantidade_y')||0),inicio:fd.get('inicio')||null,fim:fd.get('fim')||null,limite_total:fd.get('limite_total')?Number(fd.get('limite_total')):null,limite_por_cliente:fd.get('limite_por_cliente')?Number(fd.get('limite_por_cliente')):null,produto_ids:Array.from(e.currentTarget.elements.produtos?.selectedOptions||[]).map(x=>x.value),categoria_ids:Array.from(e.currentTarget.elements.categorias?.selectedOptions||[]).map(x=>x.value)});await loadPromotions();renderSaved();notify('Promoção criada.');}catch(e){notify(e.message)}});
   document.querySelectorAll('[data-promo-toggle]').forEach(b=>b.addEventListener('click',async()=>{try{await merchantRequest(`/api/merchant/promotions/${b.dataset.promoToggle}`,'PATCH',{ativa:b.dataset.active!=='true'});await loadPromotions();renderSaved();}catch(e){notify(e.message)}}));
   document.querySelectorAll('[data-promo-delete]').forEach(b=>b.addEventListener('click',async()=>{if(!confirm('Excluir esta promoção?'))return;try{await merchantRequest(`/api/merchant/promotions/${b.dataset.promoDelete}`,'DELETE');await loadPromotions();renderSaved();}catch(e){notify(e.message)}}));
