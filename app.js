@@ -1037,7 +1037,7 @@ function promotionsView(){
 }
 function courierMapView(){
  const withGps=courierLocations.filter(hasCourierGps);
- return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA EM TEMPO REAL</p><h1>Localizar entregadores</h1><p class="intro-copy">Acompanhe no mapa a localização compartilhada pelos entregadores. Cada um mantém uma cor fixa para facilitar a identificação.</p></div><div class="courier-actions"><span class="courier-gps-summary" data-courier-gps-summary>${withGps.length} com posição · ${courierLocations.length} ativo(s)</span><span class="courier-live-indicator"><i></i>Atualização automática</span><button class="secondary-button" data-courier-locations-refresh>Atualizar agora</button></div></section><section class="panel courier-map-layout"><div class="courier-map-wrap"><div id="courier-map" class="courier-map"></div><div class="courier-map-help">As posições atualizam automaticamente a cada 5 segundos quando o entregador compartilha o GPS pelo link individual. Clique em um marcador ou nome para localizar a pessoa no mapa.</div></div><aside class="courier-location-list" data-courier-location-list>${courierLocationCards()}</aside></section>`;
+ return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA EM TEMPO REAL</p><h1>Localizar entregadores</h1><p class="intro-copy">Acompanhe no mapa a localização compartilhada pelos entregadores. Cada um mantém uma cor fixa para facilitar a identificação.</p></div><div class="courier-actions"><span class="courier-gps-summary" data-courier-gps-summary>${withGps.length} com posição · ${courierLocations.length} ativo(s)</span><span class="courier-live-indicator"><i></i>Atualização automática</span><button type="button" class="secondary-button" data-courier-locations-refresh>Atualizar agora</button></div></section><section class="panel courier-map-layout"><div class="courier-map-wrap"><div class="courier-map-stage"><div id="courier-map" class="courier-map" style="height:min(68vh,700px);min-height:430px"></div><div class="courier-map-status" data-courier-map-status role="status" aria-live="polite">Carregando mapa…</div></div><div class="courier-map-help">As posições atualizam automaticamente a cada 5 segundos quando o entregador compartilha o GPS pelo link individual. Clique em um marcador ou nome para localizar a pessoa no mapa.</div></div><aside class="courier-location-list" data-courier-location-list>${courierLocationCards()}</aside></section>`;
 }
 function hasCourierGps(courier){
  const lat=courier?.ultima_latitude,lon=courier?.ultima_longitude;
@@ -1066,6 +1066,47 @@ async function loadCourierLocations(){courierLocationsLoading=true;try{const r=a
 let courierLeafletMap=null;
 let courierLeafletMarkers=new Map();
 let courierLocationPollInFlight=false;
+let leafletFallbackLoading=false;
+function setCourierMapStatus(message,actionLabel=''){
+ const status=document.querySelector('[data-courier-map-status]');
+ if(!status)return;
+ status.replaceChildren();
+ const text=document.createElement('span');
+ text.textContent=message;
+ status.appendChild(text);
+ if(actionLabel){
+  const retry=document.createElement('button');
+  retry.type='button';
+  retry.className='secondary-button';
+  retry.textContent=actionLabel;
+  retry.addEventListener('click',()=>{
+   if(window.L){initCourierMap();return;}
+   loadLeafletFallback();
+  });
+  status.appendChild(retry);
+ }
+ status.hidden=!message;
+}
+function loadLeafletFallback(){
+ if(leafletFallbackLoading)return;
+ leafletFallbackLoading=true;
+ setCourierMapStatus('O mapa não carregou. Tentando outra fonte…');
+ if(!document.querySelector('[data-leaflet-fallback-css]')){
+  const css=document.createElement('link');
+  css.rel='stylesheet';
+  css.href='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css';
+  css.dataset.leafletFallbackCss='true';
+  document.head.appendChild(css);
+ }
+ const script=document.createElement('script');
+ script.src='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
+ script.onload=()=>{leafletFallbackLoading=false;initCourierMap();};
+ script.onerror=()=>{
+  leafletFallbackLoading=false;
+  setCourierMapStatus('Não foi possível carregar o mapa. Verifique a conexão e tente novamente.','Tentar de novo');
+ };
+ document.head.appendChild(script);
+}
 function courierPopupContent(c){
  return `<div class="courier-popup"><strong>${esc(c.nome)}</strong><br><span>${esc(c.telefone||'Sem telefone')}</span><br><b>${Number(c.pedidos_ativos||0)} pedido(s) ativo(s)</b><br><small>${c.localizacao_atualizada_em?'Atualizado '+new Date(c.localizacao_atualizada_em).toLocaleString('pt-BR'):'Sem atualização'}</small></div>`;
 }
@@ -1119,14 +1160,26 @@ async function refreshCourierLocationsLive(){
 }
 function initCourierMap(attempt=0){
  const el=document.querySelector('#courier-map'); if(!el)return;
- if(!window.L){if(attempt<40)setTimeout(()=>initCourierMap(attempt+1),150);return;}
+ if(!window.L){
+  if(attempt<40){setTimeout(()=>initCourierMap(attempt+1),150);return;}
+  loadLeafletFallback();
+  return;
+ }
  try{
   if(courierLeafletMap){courierLeafletMap.remove();courierLeafletMap=null;}
   courierLeafletMarkers=new Map();
   const gps=courierLocations.filter(hasCourierGps);
   const center=gps.length?[Number(gps[0].ultima_latitude),Number(gps[0].ultima_longitude)]:[-8.28,-35.75];
   courierLeafletMap=L.map(el,{zoomControl:true}).setView(center,gps.length===1?15:13);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(courierLeafletMap);
+  let firstTileLoaded=false;
+  const tileLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(courierLeafletMap);
+  tileLayer.on('tileload',()=>{
+   firstTileLoaded=true;
+   setCourierMapStatus('');
+  });
+  tileLayer.on('tileerror',()=>{
+   if(!firstTileLoaded)setCourierMapStatus('Os marcadores podem aparecer, mas o mapa de ruas não carregou. Verifique sua conexão.');
+  });
   const bounds=[];
   courierLocations.forEach(c=>{
    if(!hasCourierGps(c))return;
@@ -1136,9 +1189,11 @@ function initCourierMap(attempt=0){
    courierLeafletMarkers.set(String(c.id),marker); bounds.push([lat,lon]);
   });
   if(bounds.length>1)courierLeafletMap.fitBounds(bounds,{padding:[35,35],maxZoom:16});
+  if(!bounds.length)setCourierMapStatus('Aguardando a primeira localização GPS. Ative o compartilhamento no celular do entregador.');
+  else setCourierMapStatus('');
   setTimeout(()=>courierLeafletMap?.invalidateSize(),100);
   bindCourierMapCards();
- }catch(e){console.error('Falha ao montar mapa de entregadores:',e);notify('Não foi possível carregar o mapa. Atualize a página e tente novamente.');}
+ }catch(e){console.error('Falha ao montar mapa de entregadores:',e);setCourierMapStatus('Não foi possível iniciar o mapa. Tente carregar novamente.','Tentar de novo');}
 }
 function merchantPanel() {
   const page = state.view;
