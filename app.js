@@ -45,6 +45,7 @@ const blank = {
     mode: 'cabo',
     deviceName: 'Impressora térmica padrão',
     copies: 1,
+    resetDays: 30,
     autoPrint: true,
     includeCustomer: true,
     includePhone: true,
@@ -232,6 +233,7 @@ async function loadMerchantState() {
     state = {
       ...state,
       ...saved,
+      printerConfig: { ...state.printerConfig, ...(saved.printerConfig || {}) },
       shop: saved.shop ? {
         ...previousShop,
         ...saved.shop,
@@ -292,6 +294,14 @@ function normalizeNeighborhoodName(value) { return String(value||'').normalize('
 
 function money(value) {
   return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function orderNumberLabel(order) {
+  const savedNumber = Number(order?.comandaNumber);
+  if (Number.isInteger(savedNumber) && savedNumber > 0) return `Pedido ${String(savedNumber).padStart(4, '0')}`;
+  const orders = [...state.orders].sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
+  const localNumber = orders.findIndex((item) => String(item.id) === String(order?.id)) + 1;
+  return `Pedido ${String(localNumber || 1).padStart(4, '0')}`;
 }
 
 function esc(value) {
@@ -533,6 +543,7 @@ async function refreshMerchantOrders() {
   const nextOrders = (result.pedidos || []).map((order) => ({
     ...(current.get(String(order.id)) || {}),
     id: order.id,
+    comandaNumber: order.comandaNumber,
     customer: order.customer || 'Cliente',
     phone: order.phone || '',
     address: order.address || '',
@@ -583,7 +594,7 @@ async function loadMerchantOrderMessages() {
 
 async function courierRequest(path,method='GET',body){return merchantApiRequest(path,method,body);}
 async function loadCouriers(){const r=await courierRequest('/api/merchant/couriers');merchantCouriers=r.entregadores||[];couriersLoaded=true;}
-function couriersView(){return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA DA LOJA</p><h1>Central de entregadores</h1><p class="intro-copy">Cadastre motoboys, compartilhe o acesso individual e organize as entregas por uma rota otimizada.</p></div><div class="courier-actions"><button class="secondary-button" data-courier-refresh>Atualizar</button><button class="primary-button" data-optimize-route>Otimizar rota dos pedidos</button></div></section>${optimizedRoute?`<section class="panel route-result"><div class="panel-heading"><div><h2>Rota otimizada</h2><p>${optimizedRoute.provider==='openrouteservice'?'Rota calculada pelo OpenRouteService.':'Endereços geocodificados; ordem original mantida até configurar ORS.'}</p></div>${optimizedRoute.mapUrl?`<a class="secondary-button" target="_blank" rel="noopener" href="${esc(optimizedRoute.mapUrl)}">Abrir mapa</a>`:''}</div><ol>${(optimizedRoute.optimized||[]).map(x=>`<li><strong>${esc(x.label||'Pedido')}</strong><small>${esc(x.address||'')}</small></li>`).join('')}</ol></section>`:''}<section class="panel courier-panel"><div class="panel-heading"><div><h2>Cadastrar motoboy</h2><p>O link de acesso é exibido uma única vez ao criar ou renovar.</p></div></div><form id="courier-create-form" class="courier-form"><label>Nome completo<input name="nome" required maxlength="120" placeholder="Nome do entregador"></label><label>Telefone<input name="telefone" maxlength="40" placeholder="(00) 00000-0000"></label><label>Veículo<input name="veiculo" maxlength="80" placeholder="Moto, placa opcional"></label><button class="primary-button" type="submit">Cadastrar e gerar link</button></form>${newlyCreatedCourierLink?`<div class="courier-link-notice"><strong>Link individual criado</strong><input readonly value="${esc(newlyCreatedCourierLink)}" id="courier-generated-link"><button type="button" class="secondary-button" data-courier-copy>Copiar link</button><small>Guarde este link e envie apenas ao entregador. Se perdê-lo, desative este cadastro e crie outro.</small></div>`:''}</section><section class="courier-list">${merchantCouriers.map(c=>`<article class="panel courier-card"><div class="courier-card-top"><div><strong>${esc(c.nome)}</strong><small>${esc(c.telefone||'Sem telefone')} ${c.veiculo?'· '+esc(c.veiculo):''}</small></div><span class="courier-state ${c.ativo?'active':'inactive'}">${c.ativo?'Ativo':'Desativado'}</span></div><p>${Number(c.pedidos_ativos||0)} pedido(s) ativo(s)</p><div class="courier-today-summary"><strong>${Number(c.entregas_hoje||0)} entregas hoje</strong><span>Taxas do dia: ${money(Number(c.ganhos_hoje||0))}</span></div><div class="courier-actions"><button class="secondary-button" data-courier-history="${c.id}">Histórico de entregas</button><button class="secondary-button" data-courier-copy-link="${c.id}" ${!c.ativo?'disabled':''}>Copiar link</button><button class="secondary-button" data-courier-toggle="${c.id}" data-active="${c.ativo?'true':'false'}">${c.ativo?'Desativar':'Ativar'}</button><button class="secondary-button" data-courier-delete="${c.id}">Excluir</button></div></article>`).join('')||'<div class="panel"><p>Nenhum entregador cadastrado ainda.</p></div>'}</section>${courierHistoryId?`<section class="panel courier-history-panel"><div class="panel-heading"><div><h2>Histórico de ${esc(merchantCouriers.find(c=>c.id===courierHistoryId)?.nome||'entregador')}</h2><p>Entregas concluídas e taxas registradas.</p></div><button class="secondary-button" data-courier-history-close>Fechar</button></div><div class="courier-history-list">${courierHistoryRows.map(h=>`<article class="courier-history-row"><div><strong>Pedido #${esc(String(h.pedido_id).slice(0,8))}</strong><small>${new Date(h.concluida_em).toLocaleString('pt-BR')} · ${esc(h.endereco||'Endereço não informado')}</small></div><strong>${money(Number(h.taxa_recebida||0))}</strong></article>`).join('')||'<p class="admin-empty">Nenhuma entrega concluída registrada.</p>'}</div></section>`:''}<section class="panel courier-note"><strong>Sobre as rotas</strong><p>O motoboy acessa seus pedidos por um link protegido. A rota abre no Google Maps com os endereços atribuídos. A otimização usa as coordenadas dos pedidos e do endereço da loja. O rastreamento GPS do entregador depende da permissão de localização do navegador.</p></section>`;}
+function couriersView(){return `<section class="page-intro"><div><p class="eyebrow">LOGÍSTICA DA LOJA</p><h1>Central de entregadores</h1><p class="intro-copy">Cadastre motoboys, compartilhe o acesso individual e organize as entregas por uma rota otimizada.</p></div><div class="courier-actions"><button class="secondary-button" data-courier-refresh>Atualizar</button><button class="primary-button" data-optimize-route>Otimizar rota dos pedidos</button></div></section>${optimizedRoute?`<section class="panel route-result"><div class="panel-heading"><div><h2>Rota otimizada</h2><p>${optimizedRoute.provider==='openrouteservice'?'Rota calculada pelo OpenRouteService.':'Endereços geocodificados; ordem original mantida até configurar ORS.'}</p></div>${optimizedRoute.mapUrl?`<a class="secondary-button" target="_blank" rel="noopener" href="${esc(optimizedRoute.mapUrl)}">Abrir mapa</a>`:''}</div><ol>${(optimizedRoute.optimized||[]).map(x=>`<li><strong>${esc(x.label||'Pedido')}</strong><small>${esc(x.address||'')}</small></li>`).join('')}</ol></section>`:''}<section class="panel courier-panel"><div class="panel-heading"><div><h2>Cadastrar motoboy</h2><p>O link de acesso é exibido uma única vez ao criar ou renovar.</p></div></div><form id="courier-create-form" class="courier-form"><label>Nome completo<input name="nome" required maxlength="120" placeholder="Nome do entregador"></label><label>Telefone<input name="telefone" maxlength="40" placeholder="(00) 00000-0000"></label><label>Veículo<input name="veiculo" maxlength="80" placeholder="Moto, placa opcional"></label><button class="primary-button" type="submit">Cadastrar e gerar link</button></form>${newlyCreatedCourierLink?`<div class="courier-link-notice"><strong>Link individual criado</strong><input readonly value="${esc(newlyCreatedCourierLink)}" id="courier-generated-link"><button type="button" class="secondary-button" data-courier-copy>Copiar link</button><small>Guarde este link e envie apenas ao entregador. Se perdê-lo, desative este cadastro e crie outro.</small></div>`:''}</section><section class="courier-list">${merchantCouriers.map(c=>`<article class="panel courier-card"><div class="courier-card-top"><div><strong>${esc(c.nome)}</strong><small>${esc(c.telefone||'Sem telefone')} ${c.veiculo?'· '+esc(c.veiculo):''}</small></div><span class="courier-state ${c.ativo?'active':'inactive'}">${c.ativo?'Ativo':'Desativado'}</span></div><p>${Number(c.pedidos_ativos||0)} pedido(s) ativo(s)</p><div class="courier-today-summary"><strong>${Number(c.entregas_hoje||0)} entregas hoje</strong><span>Taxas do dia: ${money(Number(c.ganhos_hoje||0))}</span></div><div class="courier-actions"><button class="secondary-button" data-courier-history="${c.id}">Histórico de entregas</button><button class="secondary-button" data-courier-copy-link="${c.id}" ${!c.ativo?'disabled':''}>Copiar link</button><button class="secondary-button" data-courier-toggle="${c.id}" data-active="${c.ativo?'true':'false'}">${c.ativo?'Desativar':'Ativar'}</button><button class="secondary-button" data-courier-delete="${c.id}">Excluir</button></div></article>`).join('')||'<div class="panel"><p>Nenhum entregador cadastrado ainda.</p></div>'}</section>${courierHistoryId?`<section class="panel courier-history-panel"><div class="panel-heading"><div><h2>Histórico de ${esc(merchantCouriers.find(c=>c.id===courierHistoryId)?.nome||'entregador')}</h2><p>Entregas concluídas e taxas registradas.</p></div><button class="secondary-button" data-courier-history-close>Fechar</button></div><div class="courier-history-list">${courierHistoryRows.map(h=>`<article class="courier-history-row"><div><strong>Pedido ${esc(String(h.numero_comanda||1).padStart(4,'0'))}</strong><small>${new Date(h.concluida_em).toLocaleString('pt-BR')} · ${esc(h.endereco||'Endereço não informado')}</small></div><strong>${money(Number(h.taxa_recebida||0))}</strong></article>`).join('')||'<p class="admin-empty">Nenhuma entrega concluída registrada.</p>'}</div></section>`:''}<section class="panel courier-note"><strong>Sobre as rotas</strong><p>O motoboy acessa seus pedidos por um link protegido. A rota abre no Google Maps com os endereços atribuídos. A otimização usa as coordenadas dos pedidos e do endereço da loja. O rastreamento GPS do entregador depende da permissão de localização do navegador.</p></section>`;}
 function bindCouriers(){
   document.querySelectorAll('[data-courier-history]').forEach(b=>b.onclick=async()=>{try{const r=await courierRequest('/api/merchant/couriers/history?entregador_id='+encodeURIComponent(b.dataset.courierHistory));courierHistoryRows=r.historico||[];courierHistoryId=b.dataset.courierHistory;render();}catch(e){notify(e.message);}});
   document.querySelector('[data-courier-history-close]')?.addEventListener('click',()=>{courierHistoryId=null;courierHistoryRows=[];render();});
@@ -940,6 +951,54 @@ function nav(view, icon, text, count = '') {
 }
 
 function navIcon(name) {
+  if (name === 'history') {
+    return '<span class="nav-icon history-art" aria-hidden="true"><img src="/assets/historico.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'orders') {
+    return '<span class="nav-icon orders-art" aria-hidden="true"><img src="/assets/pedidos.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'delivery') {
+    return '<span class="nav-icon delivery" aria-hidden="true"><img src="/assets/entregadores.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'map') {
+    return '<span class="nav-icon map-art" aria-hidden="true"><img src="/assets/localizar-entregadores.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'reports') {
+    return '<span class="nav-icon reports-art" aria-hidden="true"><img src="/assets/relatorios.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'promo') {
+    return '<span class="nav-icon promo-art" aria-hidden="true"><img src="/assets/promocoes.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'home') {
+    return '<span class="nav-icon home-art" aria-hidden="true"><img src="/assets/visao-geral.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'menu') {
+    return '<span class="nav-icon menu-art" aria-hidden="true"><img src="/assets/cardapio.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'categories') {
+    return '<span class="nav-icon categories-art" aria-hidden="true"><img src="/assets/categorias.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'chat') {
+    return '<span class="nav-icon chat-art" aria-hidden="true"><img src="/assets/conversas.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'help') {
+    return '<span class="nav-icon support-art" aria-hidden="true"><img src="/assets/suporte.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
+  if (name === 'printers') {
+    return '<span class="nav-icon printers-art" aria-hidden="true"><img src="/assets/impressoras.png" alt="" loading="lazy" decoding="async"></span>';
+  }
+
   const paths = {
     orders: '<path d="M7 3.5h8l3 3V20H6V3.5h1Z"/><path d="M14.5 3.5V7H18M9 11h6M9 14h6M9 17h3"/>',
     history: '<path d="M3 12a9 9 0 1 0 2.7-6.4L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
@@ -1018,11 +1077,11 @@ function reportDonut(items){
 }
 function reportsView(){
   const r=reportData||{};
-  const tabs=[['overview','Visão geral','▦'],['sales','Vendas','↗'],['products','Produtos','◆'],['operations','Operação','◉'],['filters','Filtros','☷']];
-  const tabButtons=tabs.map(([id,label,icon])=>`<button type="button" class="report-tab ${reportTab===id?'active':''}" data-report-tab="${id}"><span>${icon}</span>${label}</button>`).join('');
+  const tabs=[['overview','Visão geral','report-tab-overview.png'],['sales','Vendas','report-tab-sales.png'],['products','Produtos','report-tab-products.png'],['operations','Operação','report-tab-operations.png'],['filters','Filtros','report-tab-filters.png']];
+  const tabButtons=tabs.map(([id,label,icon])=>`<button type="button" class="report-tab ${reportTab===id?'active':''}" data-report-tab="${id}" aria-label="${label}" aria-current="${reportTab===id?'page':'false'}"><img src="/assets/${icon}" alt="" aria-hidden="true" loading="lazy" decoding="async"><span>${label}</span></button>`).join('');
   const filters=`<section class="report-filters panel ${reportTab==='filters'?'report-panel-active':'report-panel-hidden'}"><div class="report-filter-head"><div><strong>Filtros dos relatórios</strong><small>Escolha os critérios e o painel será atualizado automaticamente.</small></div><button type="button" class="secondary-button" data-report-refresh ${reportLoading?'disabled':''}>Atualizar dados</button></div><div class="report-filter-grid"><label>Período<select data-report-period><option value="today" ${reportFilters.period==='today'?'selected':''}>Hoje</option><option value="yesterday" ${reportFilters.period==='yesterday'?'selected':''}>Ontem</option><option value="7" ${reportFilters.period==='7'?'selected':''}>7 dias</option><option value="30" ${reportFilters.period==='30'?'selected':''}>30 dias</option><option value="90" ${reportFilters.period==='90'?'selected':''}>90 dias</option><option value="month" ${reportFilters.period==='month'?'selected':''}>Este mês</option><option value="lastmonth" ${reportFilters.period==='lastmonth'?'selected':''}>Mês passado</option><option value="year" ${reportFilters.period==='year'?'selected':''}>Este ano</option></select></label><label>Recebimento<select data-report-delivery><option value="all">Todos</option><option value="delivery" ${reportFilters.delivery==='delivery'?'selected':''}>Delivery</option><option value="pickup" ${reportFilters.delivery==='pickup'?'selected':''}>Retirada</option></select></label><label>Status<select data-report-status><option value="all">Todos</option><option value="Entregue" ${reportFilters.status==='Entregue'?'selected':''}>Entregues</option><option value="Cancelado" ${reportFilters.status==='Cancelado'?'selected':''}>Cancelados</option><option value="Em preparo" ${reportFilters.status==='Em preparo'?'selected':''}>Em preparo</option><option value="Aguardando" ${reportFilters.status==='Aguardando'?'selected':''}>Aguardando</option></select></label><label>Pagamento<select data-report-payment><option value="all">Todos</option>${(r.paymentMethods||[]).map(x=>`<option value="${reportEsc(x)}" ${reportFilters.payment===x?'selected':''}>${reportEsc(x)}</option>`).join('')}</select></label><label>Categoria<select data-report-category><option value="all">Todas</option>${reportOptions.categorias.map(x=>`<option value="${x.id}" ${reportFilters.category===x.id?'selected':''}>${reportEsc(x.nome)}</option>`).join('')}</select></label><label>Produto<select data-report-product><option value="all">Todos</option>${reportOptions.produtos.map(x=>`<option value="${x.id}" ${reportFilters.product===x.id?'selected':''}>${reportEsc(x.nome)}</option>`).join('')}</select></label><label>Entregador<select data-report-courier><option value="all">Todos</option>${reportOptions.entregadores.map(x=>`<option value="${x.id}" ${reportFilters.courier===x.id?'selected':''}>${reportEsc(x.nome)}</option>`).join('')}</select></label></div></section>`;
-  const kpis=[['Faturamento',reportMoney(r.kpis?.revenue),'↗'],['Pedidos',r.kpis?.orders||0,'#'],['Ticket médio',reportMoney(r.kpis?.averageTicket),'◉'],['Itens vendidos',r.kpis?.units||0,'▤'],['Cancelamentos',r.kpis?.cancellations||0,'×'],['Descontos',reportMoney(r.kpis?.discounts),'%']];
-  const kpiHtml=`<section class="report-kpis">${kpis.map(x=>`<article class="report-kpi panel"><span class="kpi-icon">${x[2]}</span><small>${x[0]}</small><strong>${x[1]}</strong></article>`).join('')}</section>`;
+  const kpis=[['Faturamento',reportMoney(r.kpis?.revenue),'report-kpi-revenue.png'],['Pedidos',r.kpis?.orders||0,'report-kpi-orders.png'],['Ticket médio',reportMoney(r.kpis?.averageTicket),'report-kpi-ticket.png'],['Itens vendidos',r.kpis?.units||0,'report-kpi-items.png'],['Cancelamentos',r.kpis?.cancellations||0,'report-kpi-cancellations.png'],['Descontos',reportMoney(r.kpis?.discounts),'report-kpi-discounts.png']];
+  const kpiHtml=`<section class="report-kpis">${kpis.map(([label,value,icon])=>`<article class="report-kpi panel"><img class="kpi-art" src="/assets/${icon}" alt="" aria-hidden="true" loading="lazy" decoding="async"><small>${label}</small><strong>${value}</strong></article>`).join('')}</section>`;
   let body='';
   if(reportTab==='overview') body=`<section class="report-grid report-overview-grid"><article class="panel report-card report-chart-card"><div class="report-card-head"><div><span class="chart-eyebrow">TENDÊNCIA</span><h2>Faturamento</h2><small>Veja a evolução das vendas no período selecionado.</small></div><strong>${reportMoney(r.kpis?.revenue)}</strong></div>${reportLineChart(r.daily)}</article><article class="panel report-card"><div class="report-card-head"><div><span class="chart-eyebrow">MIX</span><h2>Formas de pagamento</h2><small>Distribuição do valor recebido.</small></div></div>${reportDonut(r.payments)}</article></section>`;
   if(reportTab==='sales') body=`<section class="report-grid"><article class="panel report-card"><div class="report-card-head"><div><span class="chart-eyebrow">HORÁRIOS</span><h2>Pedidos por horário</h2><small>Identifique os horários de maior movimento.</small></div></div><div class="report-column-chart">${(r.hours||[]).map((d,i)=>`<div class="column-item"><div class="column-value">${d.value||0}</div><div class="column-bar" style="height:${Math.max(5,reportPct(d.value,r.maxHour))}%"></div><span>${reportEsc(d.label)}h</span></div>`).join('')||'<div class="report-empty">Sem pedidos no período.</div>'}</div></article><article class="panel report-card"><div class="report-card-head"><div><span class="chart-eyebrow">FATURAMENTO</span><h2>Vendas por dia</h2><small>Comparação diária do faturamento.</small></div></div>${reportLineChart(r.daily)}</article></section>`;
@@ -1244,7 +1303,7 @@ function merchantPanel() {
           ${nav('categories', 'categories', 'Categorias')}
           ${nav('chat', 'chat', 'Conversas', unreadMessagesCount('merchant'))}
           ${nav('support', 'help', 'Suporte')}
-          ${nav('printers', 'settings', 'Impressoras')}
+          ${nav('printers', 'printers', 'Impressoras')}
           ${nav('settings', 'settings', 'Minha loja')}
         </nav>
 
@@ -1389,7 +1448,7 @@ function orderBoard() {
 function filteredOrders() {
   const query = String(state.orderQuery || '').toLowerCase();
   return state.orders.filter((order) => {
-    const text = `${order.id} ${order.customer || ''}`.toLowerCase();
+    const text = `${orderNumberLabel(order)} ${order.customer || ''}`.toLowerCase();
     const matchesQuery = !query || text.includes(query);
     const matchesFilter = !state.orderFilter || order.fulfillment === state.orderFilter;
     return matchesQuery && matchesFilter;
@@ -1555,7 +1614,7 @@ function orderCard(order, history = false) {
   return `
     <article class="order-card ${late ? 'late' : ''}" data-order-id="${order.id}">
       <div class="order-card-top">
-        <strong>${esc(order.id)}</strong>
+        <strong>${esc(orderNumberLabel(order))}</strong>
         <time>${remaining(order)}</time>
       </div>
       <div class="customer-line">
@@ -1612,7 +1671,7 @@ async function orderDetails(order) {
   showDialog(`
     <div class="dialog-head">
       <span class="category-icon">PED</span>
-      <h2>Pedido ${esc(order.id)}</h2>
+      <h2>${esc(orderNumberLabel(order))}</h2>
       <p>${esc(order.customer || 'Cliente')} · ${order.fulfillment === 'delivery' ? esc(order.address || 'Endereco nao informado') : 'Retirada no local'}</p>
     </div>
     <div class="detail-items">
@@ -1776,7 +1835,7 @@ function chatView() {
         return `<article class="panel merchant-conversation ${open ? 'is-open' : ''}">
           <button type="button" class="merchant-conversation-toggle" data-chat-open="${esc(order.id)}" aria-expanded="${open ? 'true' : 'false'}">
             <span class="conversation-avatar" aria-hidden="true">${String(order.customer || 'C').trim().slice(0,1).toUpperCase()}</span>
-            <span class="conversation-main"><strong>${esc(order.customer || 'Cliente')}</strong><small>Pedido #${esc(String(order.id).slice(0,8))} · ${esc(fulfillmentLabel)} · ${esc(order.status)}</small>${last ? `<span class="conversation-preview">${last.from === 'merchant' ? 'Você: ' : ''}${esc(last.text)}</span>` : ''}</span>
+            <span class="conversation-main"><strong>${esc(order.customer || 'Cliente')}</strong><small>${esc(orderNumberLabel(order))} · ${esc(fulfillmentLabel)} · ${esc(order.status)}</small>${last ? `<span class="conversation-preview">${last.from === 'merchant' ? 'Você: ' : ''}${esc(last.text)}</span>` : ''}</span>
             <span class="conversation-meta"><b>${messages.length}</b><span>${open ? 'Fechar' : 'Abrir'}</span></span>
           </button>
           ${open ? `<div class="merchant-conversation-body"><div class="chat-messages compact">${messages.map((message) => `<div class="message ${message.from === 'merchant' ? 'mine' : ''}">${esc(message.text)}<small>${esc(message.time)}</small></div>`).join('')}</div>${closed ? '<p class="admin-empty">Pedido encerrado. Conversa disponível somente para consulta.</p>' : `<form class="chat-compose merchant-order-chat" data-order-chat="${esc(order.id)}"><input name="message" required maxlength="2000" placeholder="Responder ao cliente"><button type="submit">Enviar</button></form>`}</div>` : ''}
@@ -1836,6 +1895,11 @@ function printersView() {
         </select></label>
         <label>Nome da impressora<input data-printer-field="deviceName" value="${esc(state.printerConfig.deviceName || '')}" placeholder="Ex.: Epson TM-T20"></label>
         <label>Quantas vias saem<input type="number" min="1" max="10" data-printer-field="copies" value="${state.printerConfig.copies || 1}"></label>
+        <label>Reiniciar a contagem a cada
+          <input type="number" min="1" max="3650" step="1" data-printer-field="resetDays" value="${Number(state.printerConfig.resetDays || 30)}">
+          dias
+          <small>A primeira comanda após esse período volta para 0001.</small>
+        </label>
         <label class="choice-row"><input type="checkbox" data-printer-field="autoPrint" ${state.printerConfig.autoPrint ? 'checked' : ''}><span><strong>Imprimir automaticamente ao aceitar</strong><small>Sem precisar apertar o botão de impressão manual</small></span></label>
         <label class="choice-row"><input type="checkbox" data-printer-field="includeCustomer" ${state.printerConfig.includeCustomer ? 'checked' : ''}><span><strong>Incluir nome do cliente</strong></span></label>
         <label class="choice-row"><input type="checkbox" data-printer-field="includePhone" ${state.printerConfig.includePhone ? 'checked' : ''}><span><strong>Incluir telefone</strong></span></label>
@@ -2066,7 +2130,7 @@ function customerTrackingPanel(order) {
       <article class="tracking-main-card">
         <div class="tracking-header">
           <div>
-            <p class="eyebrow">PEDIDO ${esc(order.id)}</p>
+            <p class="eyebrow">${esc(orderNumberLabel(order))}</p>
             <h2>${statusLabel(order.status)}</h2>
           </div>
           <span class="tracking-pill ${order.status === 'Aguardando' ? 'waiting' : order.status === 'Em preparo' ? 'preparing' : order.status === 'Pronto' || order.status === 'Saiu para entrega' ? 'ready' : 'done'}">${esc(order.status)}</span>
@@ -2121,7 +2185,7 @@ function customerTracker(order) {
   return `
     <section class="customer-tracker">
       <div>
-        <p class="eyebrow">SEU PEDIDO ${esc(order.id)}</p>
+        <p class="eyebrow">${esc(orderNumberLabel(order))}</p>
         <h2>${statusLabel(order.status)}</h2>
         <p>${remaining(order)} · ${order.fulfillment === 'delivery' ? 'Entrega' : 'Retirada'}</p>
       </div>
@@ -2264,7 +2328,7 @@ function showTutorial(view=state.view,force=false){
   document.body.classList.add('tutorial-lock');
   const overlay=document.createElement('div');
   overlay.className='pedeia-tutorial-overlay';
-  overlay.innerHTML=`<div class="pedeia-tutorial-backdrop"></div><section class="pedeia-tutorial-card" role="dialog" aria-modal="true" aria-labelledby="pedeia-tutorial-title" aria-describedby="pedeia-tutorial-description" tabindex="-1"><button type="button" class="pedeia-tutorial-close" data-tutorial-skip aria-label="Fechar tutorial">×</button><div class="pedeia-tutorial-robot" aria-hidden="true">🤖</div><div class="pedeia-tutorial-content"><span class="pedeia-tutorial-kicker">GUIA RÁPIDO DA TELA</span><div class="pedeia-tutorial-progress-track"><span class="pedeia-tutorial-progress-fill"></span></div><span class="pedeia-tutorial-step-count" aria-live="polite"></span><h2 id="pedeia-tutorial-title"></h2><p id="pedeia-tutorial-description"></p><div class="pedeia-tutorial-actions"><button type="button" class="secondary-button" data-tutorial-back>Voltar</button><button type="button" class="secondary-button" data-tutorial-skip>Pular guia</button><button type="button" class="primary-button" data-tutorial-next>Próximo</button></div></div></section>`;
+  overlay.innerHTML=`<div class="pedeia-tutorial-backdrop"></div><section class="pedeia-tutorial-card" role="dialog" aria-modal="true" aria-labelledby="pedeia-tutorial-title" aria-describedby="pedeia-tutorial-description" tabindex="-1"><div class="pedeia-tutorial-header"><div class="pedeia-tutorial-robot" aria-hidden="true"><img src="/assets/tutorial-robot.png" alt="" loading="eager" decoding="async"></div><span class="pedeia-tutorial-kicker">GUIA RÁPIDO DA TELA</span><button type="button" class="pedeia-tutorial-close" data-tutorial-skip aria-label="Fechar tutorial">×</button></div><div class="pedeia-tutorial-progress-track"><span class="pedeia-tutorial-progress-fill"></span></div><div class="pedeia-tutorial-content"><span class="pedeia-tutorial-step-count" aria-live="polite"></span><h2 id="pedeia-tutorial-title"></h2><p id="pedeia-tutorial-description"></p><div class="pedeia-tutorial-actions"><button type="button" class="secondary-button" data-tutorial-back>Voltar</button><button type="button" class="secondary-button" data-tutorial-skip>Pular guia</button><button type="button" class="primary-button" data-tutorial-next>Próximo</button></div></div></section>`;
   document.body.appendChild(overlay);
   Object.assign(overlay.style,{
     position:'fixed',
@@ -2318,7 +2382,7 @@ function showTutorial(view=state.view,force=false){
   renderStep();
   tutorialCard.focus();
 }
-function mountTutorialRobot(){if(!merchantLogged()||isAdmin)return;document.querySelector('.pedeia-tutorial-robot-fab')?.remove();const fab=document.createElement('button');fab.className='pedeia-tutorial-robot-fab';fab.type='button';fab.title='Abrir tutorial desta tela';fab.setAttribute('aria-label','Abrir tutorial desta tela');fab.innerHTML='🤖<span data-tutorial-hide title="Ocultar robô até entrar novamente no site">×</span>';if(tutorialRobotHidden)return;document.body.appendChild(fab);let dragging=false,moved=false,startX=0,startY=0,left=0,top=0;const onDown=e=>{dragging=true;moved=false;const p=e.touches?.[0]||e;const r=fab.getBoundingClientRect();left=r.left;top=r.top;startX=p.clientX;startY=p.clientY;fab.setPointerCapture?.(e.pointerId);};const onMove=e=>{if(!dragging)return;const p=e.touches?.[0]||e;const dx=p.clientX-startX,dy=p.clientY-startY;if(Math.abs(dx)+Math.abs(dy)>6)moved=true;const maxLeft=Math.max(4,window.innerWidth-fab.offsetWidth-4),maxTop=Math.max(4,window.innerHeight-fab.offsetHeight-4);fab.style.left=`${Math.max(4,Math.min(maxLeft,left+dx))}px`;fab.style.top=`${Math.max(4,Math.min(maxTop,top+dy))}px`;fab.style.right='auto';fab.style.bottom='auto';};const onUp=()=>{dragging=false;};fab.addEventListener('pointerdown',onDown);fab.addEventListener('pointermove',onMove);fab.addEventListener('pointerup',onUp);fab.addEventListener('pointercancel',onUp);fab.addEventListener('click',e=>{if(moved){e.preventDefault();return;}showTutorial(state.view,true);});fab.querySelector('[data-tutorial-hide]').addEventListener('click',e=>{e.stopPropagation();tutorialRobotHidden=true;fab.remove();notify('Robô ocultado até você entrar novamente no site.');});}
+function mountTutorialRobot(){if(!merchantLogged()||isAdmin)return;document.querySelector('.pedeia-tutorial-robot-fab')?.remove();const fab=document.createElement('button');fab.className='pedeia-tutorial-robot-fab';fab.type='button';fab.title='Abrir tutorial desta tela';fab.setAttribute('aria-label','Abrir tutorial desta tela');fab.innerHTML='<img src="/assets/tutorial-robot.png" alt="Robô do tutorial" loading="eager" decoding="async"><span data-tutorial-hide title="Ocultar robô até entrar novamente no site">×</span>';if(tutorialRobotHidden)return;document.body.appendChild(fab);let dragging=false,moved=false,startX=0,startY=0,left=0,top=0;const onDown=e=>{dragging=true;moved=false;const p=e.touches?.[0]||e;const r=fab.getBoundingClientRect();left=r.left;top=r.top;startX=p.clientX;startY=p.clientY;fab.setPointerCapture?.(e.pointerId);};const onMove=e=>{if(!dragging)return;const p=e.touches?.[0]||e;const dx=p.clientX-startX,dy=p.clientY-startY;if(Math.abs(dx)+Math.abs(dy)>6)moved=true;const maxLeft=Math.max(4,window.innerWidth-fab.offsetWidth-4),maxTop=Math.max(4,window.innerHeight-fab.offsetHeight-4);fab.style.left=`${Math.max(4,Math.min(maxLeft,left+dx))}px`;fab.style.top=`${Math.max(4,Math.min(maxTop,top+dy))}px`;fab.style.right='auto';fab.style.bottom='auto';};const onUp=()=>{dragging=false;};fab.addEventListener('pointerdown',onDown);fab.addEventListener('pointermove',onMove);fab.addEventListener('pointerup',onUp);fab.addEventListener('pointercancel',onUp);fab.addEventListener('click',e=>{if(moved){e.preventDefault();return;}showTutorial(state.view,true);});fab.querySelector('[data-tutorial-hide]').addEventListener('click',e=>{e.stopPropagation();tutorialRobotHidden=true;fab.remove();notify('Robô ocultado até você entrar novamente no site.');});}
 function initTutorialForView(){if(!merchantLogged()||isAdmin)return;mountTutorialRobot();setTimeout(()=>{if(!tutorialSeen(state.view))showTutorial(state.view,false);},250);}
 
 function bindMerchant() {
@@ -2651,9 +2715,24 @@ function handleAction(event) {
       if (field === 'mode') return;
       if (input.type === 'checkbox') state.printerConfig[field] = input.checked;
       else if (field === 'copies') state.printerConfig[field] = Number(input.value || 1);
+      else if (field === 'resetDays') state.printerConfig[field] = Number(input.value || 30);
       else state.printerConfig[field] = String(input.value || '');
     });
-    return renderSaved();
+    return (async () => {
+      try {
+        if (authenticatedUser) {
+          const result = await merchantApiRequest('/api/merchant/print-config', 'PATCH', {
+            resetDays: state.printerConfig.resetDays
+          });
+          state.printerConfig.resetDays = result.resetDays;
+        }
+        await save();
+        render();
+        notify('Configurações da comanda salvas.');
+      } catch (error) {
+        notify(error.message || 'Não foi possível salvar as configurações da comanda.');
+      }
+    })();
   }
   if (action === 'new-printer') {
     const nextName = `Impressora ${state.printers.length + 1}`;
@@ -2750,18 +2829,19 @@ async function persistOrderStatus(order,status) {
 
 async function acceptOrder(id) {
   const order=state.orders.find(item=>item.id===id);if(!order)return;
-  try{await persistOrderStatus(order,'Em preparo');if(state.printerConfig.autoPrint)printReceipt(order);render();notify(`Pedido ${order.id} aceito.`);}catch(e){notify(e.message||'Não foi possível aceitar o pedido.');}
+  try{await persistOrderStatus(order,'Em preparo');if(state.printerConfig.autoPrint)printReceipt(order);render();  notify(`${orderNumberLabel(order)} aceito.`);}catch(e){notify(e.message||'Não foi possível aceitar o pedido.');}
 }
 
 async function advanceOrder(id) {
   const order=state.orders.find(item=>item.id===id);if(!order)return;
   const next={Aguardando:'Em preparo','Em preparo':'Pronto',Pronto:order.fulfillment==='delivery'?'Saiu para entrega':'Entregue','Saiu para entrega':'Entregue','Em rota':'Entregue'};
-  try{await persistOrderStatus(order,next[order.status]||'Entregue');render();notify(`Pedido ${order.id} atualizado.`);}catch(e){notify(e.message||'Não foi possível atualizar o pedido.');}
+  try{await persistOrderStatus(order,next[order.status]||'Entregue');render();notify(`${orderNumberLabel(order)} atualizado.`);}catch(e){notify(e.message||'Não foi possível atualizar o pedido.');}
 }
 
 function sampleOrder() {
   return {
     id: '#1042',
+    comandaNumber: 1042,
     customer: 'Maria Souza',
     phone: '(11) 99999-0000',
     address: 'Rua da Liberdade, 240 · Centro',
@@ -2794,7 +2874,7 @@ function buildReceiptMarkup(order, config = state.printerConfig, preview = false
   return `
     <div class="receipt-paper ${preview ? 'preview' : ''}">
       <div class="receipt-brand">${esc(state.shop?.name || 'PedeIA')}</div>
-      <div class="receipt-header">COMANDA ${esc(order.id || '#0000')}</div>
+      <div class="receipt-header">${esc(orderNumberLabel(order))}</div>
       <div class="receipt-meta">${new Date(order.createdAt || Date.now()).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</div>
       ${customer}
       ${phone}
@@ -2823,7 +2903,7 @@ function printReceipt(order) {
     <html>
       <head>
         <meta charset="utf-8">
-        <title>Comanda ${esc(order.id || '')}</title>
+        <title>${esc(orderNumberLabel(order))}</title>
         <style>
           body { margin: 0; background: #f5f5f5; font-family: Arial, sans-serif; color: #1a1a1a; }
           .print-shell { width: 100%; display: flex; justify-content: center; padding: 16px; box-sizing: border-box; }
@@ -2863,9 +2943,9 @@ function printReceipt(order) {
   }, 150);
 
   if (config.mode === 'bluetooth' && navigator.bluetooth) {
-    notify('Comanda enviada diretamente para impressão Bluetooth.');
+    notify(`${orderNumberLabel(order)} enviada para impressão Bluetooth.`);
   } else {
-    notify(`Comanda ${order.id} enviada diretamente para impressão.`);
+    notify(`${orderNumberLabel(order)} enviada para impressão.`);
   }
 }
 
@@ -3104,10 +3184,13 @@ function checkoutDialog() {
         const response=await fetch('/api/public-order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({loja:publicShop(),cliente:{nome:customer,telefone:phone},tipo_entrega:fulfillment,endereco:address,endereco_partes:addressParts,bairro_entrega:addressParts.neighborhood,taxa_entrega:estimatedDeliveryFee,pagamento:String(data.get('payment')||'Pix'),observacoes:'',itens:orderItems})});
         const result=await response.json();if(!response.ok)throw new Error(result.error||'Não foi possível enviar o pedido.');
         const minutes=Number(state.delivery.deliveryMinutes||45);
-        order={id:result.pedido.id,customer,phone,address,payment:String(data.get('payment')||'Pix'),fulfillment,status:result.pedido.status,total:Number(result.pedido.total),deliveryFee:Number(result.pedido.taxa_entrega||0),items:state.cart.map(item=>({id:item.id,name:item.name,description:item.description,quantity:item.quantity,notes:item.notes,selections:item.selections||[],price:item.price})),notes:'',createdAt:new Date(result.pedido.created_at).getTime(),readyAt:Date.now()+minutes*60000,updatedAt:Date.now(),trackingToken:result.tracking_token};
+        order={id:result.pedido.id,comandaNumber:result.pedido.numero_comanda,customer,phone,address,payment:String(data.get('payment')||'Pix'),fulfillment,status:result.pedido.status,total:Number(result.pedido.total),deliveryFee:Number(result.pedido.taxa_entrega||0),items:state.cart.map(item=>({id:item.id,name:item.name,description:item.description,quantity:item.quantity,notes:item.notes,selections:item.selections||[],price:item.price})),notes:'',createdAt:new Date(result.pedido.created_at).getTime(),readyAt:Date.now()+minutes*60000,updatedAt:Date.now(),trackingToken:result.tracking_token};
         const oldProfile=JSON.parse(localStorage.getItem(clientKey)||'{}');localStorage.setItem(clientKey,JSON.stringify({ ...oldProfile,name:customer,phone,address,addressParts,lastTrackingToken:result.tracking_token,lastOrderId:order.id }));
       } else {
-        order={id:`#${Date.now().toString().slice(-4)}`,customer,phone,address,payment:String(data.get('payment')||'Pix'),fulfillment,status:state.delivery.autoAccept?'Em preparo':'Aguardando',total:total+estimatedDeliveryFee,deliveryFee:estimatedDeliveryFee,items:state.cart.map(item=>({id:item.id,name:item.name,description:item.description,quantity:item.quantity,notes:item.notes,selections:item.selections||[],price:item.price})),notes:'',createdAt:Date.now(),readyAt:Date.now()+45*60000,updatedAt:Date.now()};
+        const latestLocalOrder=[...state.orders].sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0))[0];
+        const localPeriodExpired=!latestLocalOrder||Date.now()-Number(latestLocalOrder.createdAt||0)>=Number(state.printerConfig.resetDays||30)*86400000;
+        const localNextNumber=localPeriodExpired?1:Number(latestLocalOrder.comandaNumber||state.orders.length)+1;
+        order={id:`#${Date.now().toString().slice(-4)}`,comandaNumber:localNextNumber,customer,phone,address,payment:String(data.get('payment')||'Pix'),fulfillment,status:state.delivery.autoAccept?'Em preparo':'Aguardando',total:total+estimatedDeliveryFee,deliveryFee:estimatedDeliveryFee,items:state.cart.map(item=>({id:item.id,name:item.name,description:item.description,quantity:item.quantity,notes:item.notes,selections:item.selections||[],price:item.price})),notes:'',createdAt:Date.now(),readyAt:Date.now()+45*60000,updatedAt:Date.now()};
       }
       localStorage.setItem(clientKey,JSON.stringify({name:customer,phone,address,addressParts,...(order.trackingToken?{lastTrackingToken:order.trackingToken,lastOrderId:order.id}:{})}));
       state.orders=state.orders.filter(o=>o.id!==order.id);state.orders.push(order);state.cart=[];
