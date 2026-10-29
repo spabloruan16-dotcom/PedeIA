@@ -56,6 +56,33 @@ select:focus {
   box-shadow: 0 7px 16px rgba(146, 41, 31, .2);
 }
 
+.brand {
+  gap: 0;
+}
+
+.brand-logo {
+  display: block;
+  width: min(190px, 100%);
+  max-height: 66px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.auth-art .brand-logo {
+  width: min(270px, 100%);
+  max-height: 92px;
+}
+
+.customer-header .brand-logo {
+  width: min(170px, 100%);
+  max-height: 58px;
+}
+
+.sidebar-header .brand-logo {
+  width: min(180px, 100%);
+  max-height: 62px;
+}
+
 .auth-screen {
   min-height: 100svh;
   grid-template-columns: minmax(0, 1.08fr) minmax(420px, .92fr);
@@ -728,6 +755,7 @@ select:focus {
 }
 
 .nav-icon.delivery,
+.nav-icon.store-art,
 .nav-icon.orders-art,
 .nav-icon.history-art,
 .nav-icon.map-art,
@@ -749,6 +777,7 @@ select:focus {
 }
 
 .nav-icon.delivery img,
+.nav-icon.store-art img,
 .nav-icon.orders-art img,
 .nav-icon.history-art img,
 .nav-icon.map-art img,
