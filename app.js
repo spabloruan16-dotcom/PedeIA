@@ -1227,7 +1227,12 @@ function merchantPanel() {
           <button data-action="copy">Copiar</button>
         </div>
 
+        <div class="mobile-menu-backdrop" data-menu-backdrop hidden></div>
         <nav class="side-nav" id="merchant-navigation">
+          <div class="mobile-menu-heading">
+            <strong>Navegação</strong>
+            <button type="button" class="mobile-menu-close" data-menu-close aria-label="Fechar menu">×</button>
+          </div>
           ${nav('orders', 'orders', 'Pedidos', activeOrders().length)}
           ${nav('history', 'history', 'Histórico', state.orders.filter((order) => ['Entregue', 'Finalizado', 'Cancelado', 'Cancelada'].includes(String(order.status || '').trim())).length)}
           ${nav('couriers', 'delivery', 'Entregadores')}
@@ -2261,6 +2266,28 @@ function showTutorial(view=state.view,force=false){
   overlay.className='pedeia-tutorial-overlay';
   overlay.innerHTML=`<div class="pedeia-tutorial-backdrop"></div><section class="pedeia-tutorial-card" role="dialog" aria-modal="true" aria-labelledby="pedeia-tutorial-title" aria-describedby="pedeia-tutorial-description" tabindex="-1"><button type="button" class="pedeia-tutorial-close" data-tutorial-skip aria-label="Fechar tutorial">×</button><div class="pedeia-tutorial-robot" aria-hidden="true">🤖</div><div class="pedeia-tutorial-content"><span class="pedeia-tutorial-kicker">GUIA RÁPIDO DA TELA</span><div class="pedeia-tutorial-progress-track"><span class="pedeia-tutorial-progress-fill"></span></div><span class="pedeia-tutorial-step-count" aria-live="polite"></span><h2 id="pedeia-tutorial-title"></h2><p id="pedeia-tutorial-description"></p><div class="pedeia-tutorial-actions"><button type="button" class="secondary-button" data-tutorial-back>Voltar</button><button type="button" class="secondary-button" data-tutorial-skip>Pular guia</button><button type="button" class="primary-button" data-tutorial-next>Próximo</button></div></div></section>`;
   document.body.appendChild(overlay);
+  Object.assign(overlay.style,{
+    position:'fixed',
+    inset:'0',
+    zIndex:'2147483647',
+    display:'flex',
+    alignItems:'center',
+    justifyContent:'center',
+    boxSizing:'border-box',
+    padding:'16px',
+    overflowY:'auto',
+    overscrollBehavior:'contain'
+  });
+  const tutorialCard=overlay.querySelector('.pedeia-tutorial-card');
+  Object.assign(tutorialCard.style,{
+    position:'relative',
+    zIndex:'1',
+    flex:'0 1 560px',
+    width:'min(560px, 100%)',
+    maxHeight:'calc(100vh - 32px)',
+    overflowY:'auto',
+    margin:'auto'
+  });
   const finish=()=>{setTutorialSeen(view);closeTutorial();};
   const renderStep=()=>{
     const step=steps[tutorialState.step];
@@ -2289,7 +2316,7 @@ function showTutorial(view=state.view,force=false){
     if(event.key==='ArrowLeft'&&tutorialState.step>0){tutorialState.step--;renderStep();}
   });
   renderStep();
-  overlay.querySelector('.pedeia-tutorial-card').focus();
+  tutorialCard.focus();
 }
 function mountTutorialRobot(){if(!merchantLogged()||isAdmin)return;document.querySelector('.pedeia-tutorial-robot-fab')?.remove();const fab=document.createElement('button');fab.className='pedeia-tutorial-robot-fab';fab.type='button';fab.title='Abrir tutorial desta tela';fab.setAttribute('aria-label','Abrir tutorial desta tela');fab.innerHTML='🤖<span data-tutorial-hide title="Ocultar robô até entrar novamente no site">×</span>';if(tutorialRobotHidden)return;document.body.appendChild(fab);let dragging=false,moved=false,startX=0,startY=0,left=0,top=0;const onDown=e=>{dragging=true;moved=false;const p=e.touches?.[0]||e;const r=fab.getBoundingClientRect();left=r.left;top=r.top;startX=p.clientX;startY=p.clientY;fab.setPointerCapture?.(e.pointerId);};const onMove=e=>{if(!dragging)return;const p=e.touches?.[0]||e;const dx=p.clientX-startX,dy=p.clientY-startY;if(Math.abs(dx)+Math.abs(dy)>6)moved=true;const maxLeft=Math.max(4,window.innerWidth-fab.offsetWidth-4),maxTop=Math.max(4,window.innerHeight-fab.offsetHeight-4);fab.style.left=`${Math.max(4,Math.min(maxLeft,left+dx))}px`;fab.style.top=`${Math.max(4,Math.min(maxTop,top+dy))}px`;fab.style.right='auto';fab.style.bottom='auto';};const onUp=()=>{dragging=false;};fab.addEventListener('pointerdown',onDown);fab.addEventListener('pointermove',onMove);fab.addEventListener('pointerup',onUp);fab.addEventListener('pointercancel',onUp);fab.addEventListener('click',e=>{if(moved){e.preventDefault();return;}showTutorial(state.view,true);});fab.querySelector('[data-tutorial-hide]').addEventListener('click',e=>{e.stopPropagation();tutorialRobotHidden=true;fab.remove();notify('Robô ocultado até você entrar novamente no site.');});}
 function initTutorialForView(){if(!merchantLogged()||isAdmin)return;mountTutorialRobot();setTimeout(()=>{if(!tutorialSeen(state.view))showTutorial(state.view,false);},250);}
@@ -2297,15 +2324,27 @@ function initTutorialForView(){if(!merchantLogged()||isAdmin)return;mountTutoria
 function bindMerchant() {
   const menuToggle = document.querySelector('.mobile-menu-toggle');
   const sideNav = document.querySelector('.side-nav');
+  const menuBackdrop = document.querySelector('[data-menu-backdrop]');
+  const setMobileMenuOpen = (isOpen) => {
+    sideNav?.classList.toggle('open', isOpen);
+    menuToggle?.classList.toggle('active', isOpen);
+    menuToggle?.setAttribute('aria-expanded', String(isOpen));
+    menuToggle?.setAttribute('aria-label', isOpen ? 'Fechar menu' : 'Abrir menu');
+    menuBackdrop?.toggleAttribute('hidden', !isOpen);
+    document.body.classList.toggle('mobile-menu-open', isOpen);
+  };
   menuToggle?.addEventListener('click', () => {
-    const isOpen = sideNav.classList.toggle('open');
-    menuToggle.classList.toggle('active', isOpen);
-    menuToggle.setAttribute('aria-expanded', String(isOpen));
-    menuToggle.setAttribute('aria-label', isOpen ? 'Fechar menu' : 'Abrir menu');
+    setMobileMenuOpen(!sideNav?.classList.contains('open'));
+  });
+  menuBackdrop?.addEventListener('click', () => setMobileMenuOpen(false));
+  document.querySelector('[data-menu-close]')?.addEventListener('click', () => setMobileMenuOpen(false));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && sideNav?.classList.contains('open')) setMobileMenuOpen(false);
   });
 
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.onclick = async () => {
+      setMobileMenuOpen(false);
       state.view = button.dataset.view;
       if(state.view==='support'){try{await loadMerchantTickets();supportThread=merchantTickets[0]?.id||null;if(supportThread){const r=await supportRequest(`/api/support/${supportThread}/messages`);supportMessagesList=await Promise.all((r.mensagens||[]).map(async m=>({...m,signedUrl:await signedSupportUrl(m.anexo_url)})));}}catch(e){notify(e.message);}}
       if(state.view==='chat'){try{await loadMerchantOrderMessages();}catch(e){notify(e.message||'Não foi possível carregar as conversas.');}}
