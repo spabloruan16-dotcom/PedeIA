@@ -292,8 +292,8 @@ function validWhatsAppWebhookSignature(rawBody, signature, appSecret) {
 
 async function handleWhatsAppWebhook(request, response) {
   const settings = whatsappSettings();
-  if (!settings.appSecret || !settings.verifyToken) return respondJson(response, 503, { error: "Webhook do WhatsApp nao configurado" });
   if (request.method === "GET") {
+    if (!settings.verifyToken) return respondJson(response, 503, { error: "Token de verificacao do webhook nao configurado" });
     const mode = request.url ? new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("hub.mode") : null;
     const token = request.url ? new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("hub.verify_token") : null;
     const challenge = request.url ? new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("hub.challenge") : null;
@@ -307,6 +307,7 @@ async function handleWhatsAppWebhook(request, response) {
     return;
   }
   if (request.method !== "POST") return respondJson(response, 405, { error: "Metodo nao permitido" });
+  if (!settings.appSecret) return respondJson(response, 503, { error: "Segredo do app Meta nao configurado para validar webhooks" });
   const rawBody = await readRequestBuffer(request);
   if (!validWhatsAppWebhookSignature(rawBody, request.headers["x-hub-signature-256"], settings.appSecret)) {
     return respondJson(response, 401, { error: "Assinatura do webhook invalida" });
@@ -903,6 +904,403 @@ async function userMerchant(userId) {
   const r = await subscriptionPool.query("SELECT id FROM public.comerciantes WHERE id=$1 LIMIT 1", [userId]);
   return r.rows[0] || null;
 }
+async function routeDataDeletion(request, response, pathname) {
+  if (!subscriptionPool) return respondJson(response, 503, { error: "Banco de dados indisponivel" });
+
+  if (pathname === "/api/data-deletion-request") {
+    const auth = await supportUser(request);
+    if (auth.error) return respondJson(response, auth.status, { error: auth.error });
+    const merchant = await userMerchant(auth.user.id);
+    if (!merchant) return respondJson(response, 403, { error: "Perfil de comerciante nao encontrado" });
+
+    if (request.method === "GET") {
+      const result = await subscriptionPool.query(
+        `SELECT id,status,solicitada_em,confirmada_em,executar_em,concluida_em,ultimo_erro
+         FROM public.solicitacoes_exclusao_dados
+         WHERE comerciante_id=$1
+         ORDER BY created_at DESC LIMIT 1`,
+        [auth.user.id]
+      );
+      return respondJson(response, 200, { solicitacao: result.rows[0] || null });
+    }
+
+    if (request.method === "POST") {
+      const body = await readRequestJson(request);
+      const motivo = String(body.motivo || "").trim().slice(0, 1000) || null;
+      const client = await subscriptionPool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [auth.user.id]);
+        const existing = await client.query(
+          `SELECT id,status,solicitada_em,confirmada_em,executar_em,concluida_em
+           FROM public.solicitacoes_exclusao_dados
+           WHERE comerciante_id=$1
+             AND status IN ('solicitada','aprovada','processando','falhou')
+           ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+          [auth.user.id]
+        );
+        if (existing.rowCount) {
+          await client.query("COMMIT");
+          return respondJson(response, 200, { solicitacao: existing.rows[0] });
+        }
+        const created = await client.query(
+          `INSERT INTO public.solicitacoes_exclusao_dados(comerciante_id,motivo)
+           VALUES($1,$2)
+           RETURNING id,status,solicitada_em,confirmada_em,executar_em,concluida_em`,
+          [auth.user.id, motivo]
+        );
+        await client.query("COMMIT");
+        return respondJson(response, 201, { solicitacao: created.rows[0] });
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+    response.setHeader("Allow", "GET, POST");
+    return respondJson(response, 405, { error: "Metodo nao permitido" });
+  }
+
+  const adminPath = pathname === "/api/admin/data-deletion-requests" ||
+    /^\/api\/admin\/data-deletion-requests\/[0-9a-f-]{36}$/i.test(pathname);
+  if (!adminPath) return respondJson(response, 404, { error: "Rota nao encontrada" });
+  const auth = await requireAdmin(request);
+  if (auth.error) return respondJson(response, auth.status, { error: auth.error });
+
+  if (pathname === "/api/admin/data-deletion-requests" && request.method === "GET") {
+    const result = await subscriptionPool.query(
+      `SELECT r.id,r.comerciante_id,r.status,r.motivo,r.solicitada_em,r.confirmada_em,
+              r.executar_em,r.tentativas,r.ultimo_erro,c.nome AS comerciante_nome,c.email,
+              l.nome AS loja_nome
+       FROM public.solicitacoes_exclusao_dados r
+       LEFT JOIN public.comerciantes c ON c.id=r.comerciante_id
+       LEFT JOIN LATERAL (
+         SELECT nome FROM public.lojas WHERE merchant_id=r.comerciante_id ORDER BY created_at LIMIT 1
+       ) l ON TRUE
+       WHERE r.status IN ('solicitada','aprovada','processando','falhou')
+       ORDER BY r.solicitada_em ASC LIMIT 200`
+    );
+    return respondJson(response, 200, { solicitacoes: result.rows });
+  }
+
+  const match = pathname.match(/^\/api\/admin\/data-deletion-requests\/([0-9a-f-]{36})$/i);
+  if (match && request.method === "PATCH") {
+    const body = await readRequestJson(request);
+    const action = String(body.action || "");
+    if (!["confirm", "reject", "cancel"].includes(action)) {
+      return respondJson(response, 400, { error: "Acao de encerramento invalida" });
+    }
+    const client = await subscriptionPool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(
+        `SELECT id,comerciante_id,status,executar_em,status_assinatura_anterior,fim_assinatura_anterior
+         FROM public.solicitacoes_exclusao_dados WHERE id=$1 FOR UPDATE`,
+        [match[1]]
+      );
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return respondJson(response, 404, { error: "Solicitacao nao encontrada" });
+      }
+      const record = current.rows[0];
+      let updated;
+      if (action === "confirm" && record.status === "solicitada") {
+        const subscription = await client.query(
+          "SELECT status_assinatura,fim_assinatura FROM public.comerciantes WHERE id=$1 FOR UPDATE",
+          [record.comerciante_id]
+        );
+        if (!subscription.rowCount) {
+          await client.query("ROLLBACK");
+          return respondJson(response, 404, { error: "Comerciante nao encontrado" });
+        }
+        updated = await client.query(
+          `UPDATE public.solicitacoes_exclusao_dados
+           SET status='aprovada',confirmada_por=$2,confirmada_em=NOW(),
+               status_assinatura_anterior=$3,fim_assinatura_anterior=$4,
+               executar_em=NOW()+INTERVAL '30 days',ultimo_erro=NULL,updated_at=NOW()
+           WHERE id=$1
+           RETURNING id,status,solicitada_em,confirmada_em,executar_em`,
+          [match[1], auth.user.id, subscription.rows[0].status_assinatura, subscription.rows[0].fim_assinatura]
+        );
+        await client.query(
+          "UPDATE public.comerciantes SET status_assinatura='suspensa',fim_assinatura=NULL,updated_at=NOW() WHERE id=$1",
+          [record.comerciante_id]
+        );
+      } else if (action === "reject" && record.status === "solicitada") {
+        updated = await client.query(
+          `UPDATE public.solicitacoes_exclusao_dados
+           SET status='recusada',confirmada_por=$2,confirmada_em=NOW(),updated_at=NOW()
+           WHERE id=$1 RETURNING id,status,solicitada_em,confirmada_em,executar_em`,
+          [match[1], auth.user.id]
+        );
+      } else if (action === "cancel" && record.status === "aprovada" &&
+                 record.comerciante_id && record.executar_em && new Date(record.executar_em).getTime() > Date.now()) {
+        updated = await client.query(
+          `UPDATE public.solicitacoes_exclusao_dados
+           SET status='cancelada',updated_at=NOW()
+           WHERE id=$1 RETURNING id,status,solicitada_em,confirmada_em,executar_em`,
+          [match[1]]
+        );
+        await client.query(
+          `UPDATE public.comerciantes
+           SET status_assinatura=CASE WHEN status_assinatura='suspensa' THEN $2 ELSE status_assinatura END,
+               fim_assinatura=CASE WHEN status_assinatura='suspensa' THEN $3 ELSE fim_assinatura END,
+               updated_at=NOW()
+           WHERE id=$1`,
+          [record.comerciante_id, record.status_assinatura_anterior, record.fim_assinatura_anterior]
+        );
+      } else {
+        await client.query("ROLLBACK");
+        return respondJson(response, 409, { error: "A solicitacao nao permite essa acao no estado atual" });
+      }
+      await client.query("COMMIT");
+      return respondJson(response, 200, { solicitacao: updated.rows[0] });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  response.setHeader("Allow", "GET, PATCH");
+  return respondJson(response, 405, { error: "Metodo nao permitido" });
+}
+
+async function listAndDeleteSupportFiles(merchantId) {
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY nao configurada");
+  const headers = {
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
+    "Content-Type": "application/json"
+  };
+  const paths = [];
+  for (let offset = 0; ; offset += 1000) {
+    const response = await fetch(`${supabaseUrl}/storage/v1/object/list/atendimento-arquivos`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prefix: merchantId, limit: 1000, offset, sortBy: { column: "name", order: "asc" } })
+    });
+    if (!response.ok) throw new Error(`Storage retornou HTTP ${response.status} ao listar anexos`);
+    const objects = await response.json();
+    if (!Array.isArray(objects)) throw new Error("Resposta inesperada ao listar anexos do suporte");
+    paths.push(...objects.filter(item => item && item.name).map(item => `${merchantId}/${item.name}`));
+    if (objects.length < 1000) break;
+  }
+  for (let index = 0; index < paths.length; index += 100) {
+    const response = await fetch(`${supabaseUrl}/storage/v1/object/atendimento-arquivos`, {
+      method: "DELETE",
+      headers,
+      body: JSON.stringify({ prefixes: paths.slice(index, index + 100) })
+    });
+    if (!response.ok) throw new Error(`Storage retornou HTTP ${response.status} ao excluir anexos`);
+  }
+}
+
+async function anonymizeMerchantData(merchantId) {
+  const client = await subscriptionPool.connect();
+  try {
+    await client.query("BEGIN");
+    const stores = await client.query("SELECT id FROM public.lojas WHERE merchant_id=$1", [merchantId]);
+    const storeIds = stores.rows.map(row => row.id);
+    if (storeIds.length) {
+      await client.query(
+        `DELETE FROM public.mensagens_pedidos m
+         USING public.pedidos p WHERE m.pedido_id=p.id AND p.loja_id=ANY($1::uuid[])`,
+        [storeIds]
+      );
+
+      const orderColumnsResult = await client.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema='public' AND table_name='pedidos'`
+      );
+      const orderColumns = new Set(orderColumnsResult.rows.map(row => row.column_name));
+      const personalOrderAssignments = [
+        ["endereco", "NULL"], ["endereco_partes", "NULL"],
+        ["latitude_entrega", "NULL"], ["longitude_entrega", "NULL"],
+        ["observacoes", "''"], ["public_token_hash", "NULL"]
+      ];
+      const orderAssignments = personalOrderAssignments
+        .filter(([column]) => orderColumns.has(column))
+        .map(([column, value]) => `${column}=${value}`);
+      if (orderAssignments.length) {
+        await client.query(
+          `UPDATE public.pedidos SET ${orderAssignments.join(",")},updated_at=NOW()
+           WHERE loja_id=ANY($1::uuid[])`,
+          [storeIds]
+        );
+      }
+      const itemColumnsResult = await client.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema='public' AND table_name='itens_do_pedido'`
+      );
+      const itemColumns = new Set(itemColumnsResult.rows.map(row => row.column_name));
+      const personalItemAssignments = [];
+      if (itemColumns.has("observacao")) personalItemAssignments.push("observacao=NULL");
+      if (itemColumns.has("personalizacoes")) personalItemAssignments.push("personalizacoes='[]'::jsonb");
+      if (personalItemAssignments.length) {
+        await client.query(
+          `UPDATE public.itens_do_pedido i SET ${personalItemAssignments.join(",")}
+           FROM public.pedidos p
+           WHERE i.pedido_id=p.id AND p.loja_id=ANY($1::uuid[])`,
+          [storeIds]
+        );
+      }
+
+      const customerColumnsResult = await client.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema='public' AND table_name='clientes'`
+      );
+      const customerColumns = new Set(customerColumnsResult.rows.map(row => row.column_name));
+      const customerAssignments = [];
+      if (customerColumns.has("nome")) customerAssignments.push("nome='Dados removidos'");
+      if (customerColumns.has("telefone")) customerAssignments.push("telefone='removido-'||c.id::text");
+      if (customerColumns.has("endereco")) customerAssignments.push("endereco=NULL");
+      if (customerColumns.has("email")) customerAssignments.push("email=NULL");
+      if (customerColumns.has("updated_at")) customerAssignments.push("updated_at=NOW()");
+      if (customerAssignments.length) {
+        await client.query(
+          `UPDATE public.clientes c SET ${customerAssignments.join(",")}
+           WHERE EXISTS (
+             SELECT 1 FROM public.pedidos p
+             WHERE p.cliente_id=c.id AND p.loja_id=ANY($1::uuid[])
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM public.pedidos other
+             WHERE other.cliente_id=c.id AND NOT (other.loja_id=ANY($1::uuid[]))
+           )`,
+          [storeIds]
+        );
+      }
+
+      const optionalTableDeletes = [
+        ["public.whatsapp_messages", `DELETE FROM public.whatsapp_messages m
+          USING public.whatsapp_conversations c WHERE m.conversation_id=c.id AND c.loja_id=ANY($1::uuid[])`],
+        ["public.whatsapp_conversations", "DELETE FROM public.whatsapp_conversations WHERE loja_id=ANY($1::uuid[])"],
+        ["public.whatsapp_connections", "DELETE FROM public.whatsapp_connections WHERE loja_id=ANY($1::uuid[])"],
+        ["public.consentimentos_marketing", "DELETE FROM public.consentimentos_marketing WHERE loja_id=ANY($1::uuid[])"],
+        ["public.pontos_clientes", "DELETE FROM public.pontos_clientes WHERE loja_id=ANY($1::uuid[])"],
+        ["public.enderecos_clientes", `DELETE FROM public.enderecos_clientes a
+          USING public.clientes c
+          WHERE a.cliente_id=c.id
+            AND EXISTS (SELECT 1 FROM public.pedidos p WHERE p.cliente_id=c.id AND p.loja_id=ANY($1::uuid[]))
+            AND NOT EXISTS (SELECT 1 FROM public.pedidos other WHERE other.cliente_id=c.id AND NOT (other.loja_id=ANY($1::uuid[])))`],
+        ["public.historico_entregas", "UPDATE public.historico_entregas SET endereco=NULL WHERE loja_id=ANY($1::uuid[])"]
+      ];
+      for (const [table, statement] of optionalTableDeletes) {
+        const exists = await client.query("SELECT to_regclass($1) IS NOT NULL AS present", [table]);
+        if (exists.rows[0]?.present) await client.query(statement, [storeIds]);
+      }
+
+      const courierColumnsResult = await client.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema='public' AND table_name='entregadores'`
+      );
+      const courierColumns = new Set(courierColumnsResult.rows.map(row => row.column_name));
+      const courierAssignments = [];
+      if (courierColumns.has("nome")) courierAssignments.push("nome='Entregador removido'");
+      if (courierColumns.has("telefone")) courierAssignments.push("telefone=NULL");
+      if (courierColumns.has("veiculo")) courierAssignments.push("veiculo=NULL");
+      if (courierColumns.has("ativo")) courierAssignments.push("ativo=false");
+      if (courierColumns.has("ultima_latitude")) courierAssignments.push("ultima_latitude=NULL");
+      if (courierColumns.has("ultima_longitude")) courierAssignments.push("ultima_longitude=NULL");
+      if (courierColumns.has("localizacao_atualizada_em")) courierAssignments.push("localizacao_atualizada_em=NULL");
+      if (courierColumns.has("token_hash")) courierAssignments.push("token_hash=encode(gen_random_bytes(32),'hex')");
+      if (courierColumns.has("token_value")) courierAssignments.push("token_value=NULL");
+      if (courierColumns.has("updated_at")) courierAssignments.push("updated_at=NOW()");
+      if (courierAssignments.length) {
+        await client.query(
+          `UPDATE public.entregadores SET ${courierAssignments.join(",")} WHERE loja_id=ANY($1::uuid[])`,
+          [storeIds]
+        );
+      }
+    }
+
+    await client.query(
+      `DELETE FROM public.mensagens_atendimento
+       WHERE atendimento_id IN (
+         SELECT id FROM public.atendimentos WHERE comerciante_id=$1
+       )`,
+      [merchantId]
+    );
+    await client.query("DELETE FROM public.atendimentos WHERE comerciante_id=$1", [merchantId]);
+    await client.query(
+      "UPDATE public.comerciantes SET status_assinatura='suspensa',nome='Conta encerrada',email='removido+'||id::text||'@invalid.local',updated_at=NOW() WHERE id=$1",
+      [merchantId]
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+let dataDeletionJobRunning = false;
+async function processDueDataDeletions() {
+  if (!subscriptionPool || dataDeletionJobRunning) return;
+  dataDeletionJobRunning = true;
+  try {
+    for (let count = 0; count < 10; count += 1) {
+      const claimed = await subscriptionPool.query(
+        `WITH candidate AS (
+           SELECT id FROM public.solicitacoes_exclusao_dados
+           WHERE (
+             status IN ('aprovada','falhou') AND executar_em<=NOW()
+           ) OR (
+             status='processando' AND updated_at<NOW()-INTERVAL '30 minutes'
+           )
+           ORDER BY executar_em NULLS FIRST,solicitada_em
+           FOR UPDATE SKIP LOCKED LIMIT 1
+         )
+         UPDATE public.solicitacoes_exclusao_dados r
+         SET status='processando',tentativas=tentativas+1,ultimo_erro=NULL,updated_at=NOW()
+         FROM candidate WHERE r.id=candidate.id
+         RETURNING r.id,r.comerciante_id`,
+        []
+      );
+      if (!claimed.rowCount) break;
+      const { id, comerciante_id: merchantId } = claimed.rows[0];
+      try {
+        if (!merchantId) throw new Error("Solicitacao sem identificador de comerciante");
+        await listAndDeleteSupportFiles(merchantId);
+        await anonymizeMerchantData(merchantId);
+
+        const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+        if (!serviceKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY nao configurada");
+        const deleteResponse = await fetch(
+          `${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(merchantId)}`,
+          { method: "DELETE", headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }
+        );
+        if (!deleteResponse.ok && deleteResponse.status !== 404) {
+          throw new Error(`Supabase Auth retornou HTTP ${deleteResponse.status} ao remover a conta`);
+        }
+        await subscriptionPool.query(
+          `UPDATE public.solicitacoes_exclusao_dados
+           SET status='concluida',comerciante_id=NULL,confirmada_por=NULL,concluida_em=NOW(),
+               ultimo_erro=NULL,updated_at=NOW()
+           WHERE id=$1`,
+          [id]
+        );
+        console.log(`Exclusao de dados concluida para solicitacao ${id}`);
+      } catch (error) {
+        console.error(`Falha na rotina de exclusao (${id}):`, error.message);
+        await subscriptionPool.query(
+          `UPDATE public.solicitacoes_exclusao_dados
+           SET status='falhou',ultimo_erro=$2,updated_at=NOW()
+           WHERE id=$1`,
+          [id, String(error.message || "Falha na rotina").slice(0, 500)]
+        );
+      }
+    }
+  } catch (error) {
+    console.error("Rotina de exclusao indisponivel; confira se privacidade-exclusao.sql foi aplicado:", error.message);
+  } finally {
+    dataDeletionJobRunning = false;
+  }
+}
 async function supportMessages(id) {
   const r = await subscriptionPool.query(`SELECT id, atendimento_id, remetente_id, remetente_tipo, conteudo, anexo_url, anexo_nome, anexo_tipo, created_at FROM public.mensagens_atendimento WHERE atendimento_id=$1 ORDER BY created_at ASC`, [id]);
   return r.rows;
@@ -970,10 +1368,19 @@ async function routeSupport(request, response, pathname) {
   response.setHeader('Allow','GET, POST, PATCH, DELETE');return respondJson(response,405,{error:'Metodo nao permitido'});
 }
 
-http.createServer((request, response) => {
+const server = http.createServer((request, response) => {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
   let pathname = url.pathname;
 
+  if (pathname === "/api/data-deletion-request" ||
+      pathname === "/api/admin/data-deletion-requests" ||
+      /^\/api\/admin\/data-deletion-requests\/[0-9a-f-]{36}$/i.test(pathname)) {
+    routeDataDeletion(request, response, pathname).catch(error => {
+      console.error("Falha na solicitacao de exclusao de dados:", error.message);
+      if (!response.headersSent) respondJson(response, 500, { error: "Nao foi possivel processar a solicitacao de exclusao" });
+    });
+    return;
+  }
   if (pathname === "/api/admin/support" || /^\/api\/admin\/support\/[0-9a-f-]{36}(?:\/messages)?$/i.test(pathname) || pathname === "/api/support" || /^\/api\/support\/[0-9a-f-]{36}\/messages$/i.test(pathname)) {
     routeSupport(request,response,pathname).catch(error=>{console.error("Falha no atendimento:",error.message);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel concluir o atendimento"});}); return;
   }
@@ -1658,7 +2065,12 @@ http.createServer((request, response) => {
     return;
   }
 
-  const requestedPath = pathname === "/" ? "/index.html" : pathname;
+  const publicPages = {
+    "/privacidade": "/privacidade.html",
+    "/termos": "/termos.html",
+    "/exclusao-de-dados": "/exclusao-de-dados.html"
+  };
+  const requestedPath = publicPages[pathname] || (pathname === "/" ? "/index.html" : pathname);
   const filePath = path.resolve(root, `.${requestedPath}`);
   if (!filePath.startsWith(`${root}${path.sep}`)) {
     response.writeHead(403);
@@ -1674,7 +2086,16 @@ http.createServer((request, response) => {
     response.writeHead(200, { "Content-Type": mimeTypes[path.extname(filePath)] || "application/octet-stream" });
     response.end(content);
   });
-}).listen(port, "0.0.0.0", () => {
+});
+server.listen(port, "0.0.0.0", () => {
   ensureStateFile();
   console.log(`PedeIA em http://localhost:${port}`);
+  processDueDataDeletions().catch(error => {
+    console.error("Falha inesperada na rotina de exclusao:", error.message);
+  });
 });
+setInterval(() => {
+  processDueDataDeletions().catch(error => {
+    console.error("Falha inesperada na rotina de exclusao:", error.message);
+  });
+}, 15 * 60 * 1000).unref();

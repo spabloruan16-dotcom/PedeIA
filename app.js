@@ -68,6 +68,12 @@ let isAdmin = false;
 let adminMerchants = [];
 let adminTickets = [];
 let merchantTickets = [];
+let adminDeletionRequests = [];
+let adminDeletionRequestsError = null;
+let merchantDeletionRequest = null;
+let merchantDeletionRequestLoadedFor = null;
+let merchantDeletionRequestLoading = false;
+let merchantDeletionRequestError = null;
 let supportThread = null;
 let merchantChatOpenId = null;
 let whatsappIntegration = { configured: false, connected: false, conversations: [] };
@@ -523,6 +529,7 @@ async function loadAdminMerchants() {
   const result = await adminRequest('/api/admin/merchants');
   adminMerchants = result.merchants || [];
   try { await loadAdminTickets(); } catch (e) { console.warn('Atendimento indisponível:',e.message); }
+  try { await loadAdminDeletionRequests(); } catch (e) { console.warn('Solicitações de exclusão indisponíveis:',e.message); }
 }
 
 async function supportRequest(path, method='GET', body) {
@@ -541,7 +548,9 @@ async function supportUpload(file, ownerId) {
 }
 async function signedSupportUrl(path){if(!path)return '';const {data,error}=await window.pedeiaSupabase.storage.from('atendimento-arquivos').createSignedUrl(path,3600);return error?'':data?.signedUrl||'';}
 async function loadAdminTickets(){const r=await supportRequest('/api/admin/support');adminTickets=r.atendimentos||[];}
+async function loadAdminDeletionRequests(){try{const r=await supportRequest('/api/admin/data-deletion-requests');adminDeletionRequests=r.solicitacoes||[];adminDeletionRequestsError=null;}catch(error){adminDeletionRequestsError=error.message;throw error;}}
 async function loadMerchantTickets(){const r=await supportRequest('/api/support');merchantTickets=r.atendimentos||[];}
+async function loadMerchantDeletionRequest(force=false){if(!authenticatedUser)return;if(!force&&merchantDeletionRequestLoadedFor===authenticatedUser.id)return;const r=await supportRequest('/api/data-deletion-request');merchantDeletionRequest=r.solicitacao||null;merchantDeletionRequestError=null;merchantDeletionRequestLoadedFor=authenticatedUser.id;}
 async function openSupportThread(id,admin){const r=await supportRequest(`${admin?'/api/admin/support':'/api/support'}/${encodeURIComponent(id)}/messages`);supportThread=id;supportMessagesList=await Promise.all((r.mensagens||[]).map(async m=>({...m,signedUrl:await signedSupportUrl(m.anexo_url)})));if(admin){await loadAdminTickets();adminPanel();}else{await loadMerchantTickets();state.view='support';renderSaved();}}
 function bindSupportPreviews(){document.querySelectorAll('[data-support-preview]').forEach(button=>button.addEventListener('click',()=>{const url=button.dataset.supportPreview;const alt=button.dataset.supportAlt||'Imagem anexada';showDialog(`<div class="support-image-modal"><img src="${esc(url)}" alt="${esc(alt)}"></div>`);}));}
 function supportMessagesHtml(){return supportMessagesList.map(m=>{const url=m.signedUrl||'';const mime=String(m.anexo_tipo||'').toLowerCase();const filename=String(m.anexo_nome||'Anexo');const image=mime.startsWith('image/')||/\.(jpe?g|png|webp|gif|avif)$/i.test(filename);const pdf=mime==='application/pdf'||/\.pdf$/i.test(filename);const attachment=url?(image?`<button type="button" class="support-image-link" data-support-preview="${esc(url)}" data-support-alt="${esc(filename)}" aria-label="Ampliar imagem: ${esc(filename)}"><img class="support-image-preview" src="${esc(url)}" alt="${esc(filename)}" loading="lazy"><span>Ampliar imagem</span></button>`:pdf?`<a class="support-pdf-link" href="${esc(url)}" target="_blank" rel="noopener"><span aria-hidden="true">📄</span><span><strong>${esc(filename)}</strong><small>Abrir PDF em nova aba</small></span><span aria-hidden="true">↗</span></a>`:`<a href="${esc(url)}" target="_blank" rel="noopener">📎 ${esc(filename)}</a>`):'';return `<article class="support-message ${m.remetente_tipo==='admin'?'support-mine':''}"><small>${m.remetente_tipo==='admin'?'Administrador':'Comerciante'} · ${new Date(m.created_at).toLocaleString('pt-BR')}</small>${m.conteudo?`<p>${esc(m.conteudo)}</p>`:''}${attachment}</article>`;}).join('')||'<p class="admin-empty">Nenhuma mensagem ainda.</p>'; }
@@ -887,12 +896,63 @@ function bindCouriers(){
 
 function merchantSupportView(){const current=merchantTickets.find(t=>t.id===supportThread);return `<section class="page-intro"><div><p class="eyebrow">ATENDIMENTO PEDEIA</p><h1>Falar com o administrador</h1><p class="intro-copy">Tire dúvidas, informe problemas ou envie comprovantes de pagamento.</p></div></section><section class="panel support-layout"><div class="support-list"><form id="support-new-form" class="support-new"><h3>Abrir chamado</h3><label>Tipo<select name="tipo"><option value="suporte">Suporte técnico</option><option value="cobranca">Mensalidade / cobrança</option><option value="geral">Outro assunto</option></select></label><label>Assunto<input name="assunto" required maxlength="160" placeholder="Ex.: Problema nos pedidos"></label><label>Mensagem<textarea name="conteudo" required maxlength="10000" placeholder="Descreva como podemos ajudar"></textarea></label><label class="support-file">Anexar imagem ou PDF (opcional)<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label><button class="primary-button">Enviar chamado</button></form><h3>Minhas conversas</h3>${merchantTickets.map(t=>`<button class="support-ticket ${supportThread===t.id?'selected':''}" data-support-open="${t.id}"><strong>${esc(t.assunto)}</strong><small>${esc(t.tipo)} · ${esc(t.status)} · ${new Date(t.updated_at).toLocaleDateString('pt-BR')}</small><span>${esc(t.ultima_mensagem||'')}</span></button>`).join('')||'<p class="admin-empty">Você ainda não tem chamados.</p>'}</div><div class="support-conversation"><h3>${current?esc(current.assunto):'Selecione uma conversa'}</h3><div class="support-messages">${current?supportMessagesHtml():'<p class="admin-empty">Abra um chamado ou selecione uma conversa para ver as mensagens.</p>'}</div>${current?`<form id="support-reply-form" class="support-compose"><textarea name="conteudo" placeholder="Escreva sua resposta"></textarea><label class="support-file">Anexar imagem ou PDF<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label><button class="primary-button">Enviar resposta</button></form>`:''}</div></section>`;}
 function bindSupportMerchant(){document.querySelector('#support-new-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{const file=e.currentTarget.querySelector('input[type=file]')?.files?.[0];let attachment=null;if(file)attachment=await supportUpload(file,authenticatedUser.id);const result=await supportRequest('/api/support','POST',{tipo:f.get('tipo'),assunto:f.get('assunto'),conteudo:f.get('conteudo'),anexo_url:attachment?.path,anexo_nome:attachment?.name,anexo_tipo:attachment?.type});await loadMerchantTickets();await openSupportThread(result.atendimento.id,false);notify('Chamado enviado.');}catch(err){notify(err.message);}});document.querySelectorAll('[data-support-open]').forEach(b=>b.onclick=()=>openSupportThread(b.dataset.supportOpen,false));document.querySelector('#support-reply-form')?.addEventListener('submit',e=>{e.preventDefault();sendSupportMessage(false);});bindSupportPreviews();}
+function bindDataDeletionRequest(){
+  const supportLayout=document.querySelector('.support-layout');
+  if(!supportLayout)return;
+  if(merchantDeletionRequestLoadedFor!==authenticatedUser?.id){
+    supportLayout.insertAdjacentHTML('beforebegin','<section class="panel data-deletion-panel"><h2>Encerrar conta e excluir dados</h2><p>Peça o encerramento por aqui. O suporte precisa confirmar; só então começa o prazo de 30 dias.</p><p>Após o prazo, os dados pessoais serão eliminados ou anonimizados, exceto registros que precisem ser mantidos por obrigação legal.</p><p><a href="/exclusao-de-dados" target="_blank" rel="noopener">Leia as instruções públicas de exclusão de dados</a></p><small>Carregando o status da solicitação…</small></section>');
+    if(!merchantDeletionRequestLoading){
+      merchantDeletionRequestLoading=true;
+      loadMerchantDeletionRequest(true).catch(error=>{merchantDeletionRequestError=error.message;merchantDeletionRequestLoadedFor=authenticatedUser?.id||null;notify(error.message);}).finally(()=>{merchantDeletionRequestLoading=false;if(state.view==='support')renderSaved();});
+    }
+    return;
+  }
+  const activeRequest=merchantDeletionRequest&&['solicitada','aprovada','processando','falhou'].includes(merchantDeletionRequest.status);
+  const statusLabels={solicitada:'Aguardando confirmação do suporte',aprovada:'Confirmada; prazo de 30 dias iniciado',processando:'Exclusão em processamento',falhou:'Processamento pendente de nova tentativa'};
+  const statusCopy=activeRequest
+    ? `<p role="status"><strong>Status:</strong> ${statusLabels[merchantDeletionRequest.status]||esc(merchantDeletionRequest.status)}${merchantDeletionRequest.executar_em?` · previsão: ${new Date(merchantDeletionRequest.executar_em).toLocaleDateString('pt-BR')}`:''}</p>`
+    : '';
+  supportLayout.insertAdjacentHTML('beforebegin',`<section class="panel data-deletion-panel"><h2>Encerrar conta e excluir dados</h2><p>Peça o encerramento por aqui. O suporte precisa confirmar; só então começa o prazo de 30 dias.</p><p>Após o prazo, os dados pessoais serão eliminados ou anonimizados, exceto registros que precisem ser mantidos por obrigação legal.</p><p><a href="/exclusao-de-dados" target="_blank" rel="noopener">Leia as instruções públicas de exclusão de dados</a></p>${merchantDeletionRequestError?`<p role="alert">Não foi possível consultar a solicitação: ${esc(merchantDeletionRequestError)}. Tente novamente mais tarde.</p>`:statusCopy}${activeRequest||merchantDeletionRequestError?'':'<form id="data-deletion-form"><label>Observação (opcional)<textarea name="motivo" maxlength="1000" placeholder="Se quiser, informe o motivo do encerramento"></textarea></label><button class="secondary-button" type="submit">Solicitar encerramento da conta</button></form>'}</section>`);
+  document.querySelector('#data-deletion-form')?.addEventListener('submit',async event=>{
+    event.preventDefault();
+    if(!confirm('Enviar ao suporte a solicitação de encerramento da conta? O prazo de 30 dias só começa depois da confirmação do administrador.'))return;
+    const form=new FormData(event.currentTarget);
+    const button=event.currentTarget.querySelector('button');
+    button.disabled=true;
+    try{
+      const result=await supportRequest('/api/data-deletion-request','POST',{motivo:form.get('motivo')});
+      merchantDeletionRequest=result.solicitacao||null;
+      merchantDeletionRequestLoadedFor=authenticatedUser.id;
+      renderSaved();
+      notify('Solicitação enviada ao suporte.');
+    }catch(error){button.disabled=false;notify(error.message);}
+  });
+}
 function adminPanel() {
   if (!adminSupportContactLoaded) loadAdminSupportContact().then(()=>{ if(isAdmin) adminPanel(); });
   const active = adminMerchants.filter(m => m.status_assinatura === 'ativa' && (!m.fim_assinatura || Date.parse(m.fim_assinatura) >= Date.now())).length;
   const pending = adminMerchants.filter(m => m.status_assinatura === 'pendente').length;
   const expired = adminMerchants.filter(m => m.status_assinatura !== 'ativa' || (m.fim_assinatura && Date.parse(m.fim_assinatura) < Date.now())).length;
   app.innerHTML = `<main class="admin-shell"><header class="admin-header"><div>${brand()}<p class="eyebrow">CENTRAL DE CONTROLE</p><h1>Painel administrativo</h1><p>Gerencie comerciantes e assinaturas do PedeIA.</p></div><div class="admin-user"><span>${esc(authenticatedUser?.email || '')}</span><button class="secondary-button" data-action="logout">Sair</button></div></header><section class="admin-stats"><article><span>Comerciantes</span><strong>${adminMerchants.length}</strong></article><article><span>Assinaturas ativas</span><strong>${active}</strong></article><article><span>Pendentes</span><strong>${pending}</strong></article><article><span>Expiradas / suspensas</span><strong>${expired}</strong></article></section><section class="admin-list admin-contact-panel"><div class="admin-list-heading"><div><h2>WhatsApp de atendimento</h2><p>Este número será usado pelo botão “Falar com o administrador” quando a assinatura estiver pendente, suspensa ou expirada.</p></div></div><form id="admin-contact-form" class="admin-contact-form"><label>Nome para atendimento<input name="nome" maxlength="100" value="${esc(adminSupportContact.name||'')}" placeholder="Ex.: Suporte PedeIA"></label><label>Número do WhatsApp<input name="whatsapp" maxlength="30" value="${esc(adminSupportContact.phone||'')}" placeholder="Ex.: 5581999999999"></label><button class="primary-button">Salvar contato</button></form></section><section class="admin-list"><div class="admin-list-heading"><div><h2>Comerciantes</h2><p>Ative, renove ou suspenda o acesso.</p></div><button class="secondary-button" data-admin-refresh>Atualizar</button></div>${adminMerchants.length ? adminMerchants.map(m => { const exp = m.fim_assinatura ? new Date(m.fim_assinatura).toLocaleDateString('pt-BR') : 'Sem prazo'; const live = m.status_assinatura === 'ativa' && (!m.fim_assinatura || Date.parse(m.fim_assinatura) >= Date.now()); return `<article class="admin-merchant"><div class="admin-merchant-info"><strong>${esc(m.nome || 'Comerciante')}</strong><span>${esc(m.email || '')}</span><small>${esc(m.loja_nome || 'Loja ainda não cadastrada')} · ${Number(m.total_pedidos || 0)} pedidos</small></div><div class="admin-merchant-status"><b class="admin-status ${live ? 'active' : m.status_assinatura === 'pendente' ? 'pending' : 'blocked'}">${live ? 'Ativa' : esc(m.status_assinatura || 'pendente')}</b><small>Vencimento: ${exp}</small></div><div class="admin-actions"><button class="primary-button" data-admin-status="ativa" data-admin-id="${m.id}">Ativar 30 dias</button><button class="secondary-button" data-admin-message="${m.id}">Enviar mensagem</button><button class="secondary-button" data-admin-status="suspensa" data-admin-id="${m.id}">Suspender</button><button class="secondary-button" data-admin-status="pendente" data-admin-id="${m.id}">Pendente</button></div></article>`; }).join('') : '<p class="admin-empty">Nenhum comerciante cadastrado ainda.</p>'}</section><section class="admin-list support-admin"><div class="admin-list-heading"><div><h2>Central de atendimento</h2><p>Mensagens, cobranças e chamados dos comerciantes.</p></div><button class="secondary-button" data-support-refresh>Atualizar</button></div><div class="support-layout"><div class="support-list">${adminTickets.map(t=>`<article class="support-ticket-wrap ${supportThread===t.id?'selected':''}"><button class="support-ticket" data-admin-thread="${t.id}"><strong>${esc(t.loja_nome||t.comerciante_nome||'Comerciante')}</strong><small>${esc(t.tipo)} · ${esc(t.status)}</small><span>${esc(t.assunto)} — ${esc(t.ultima_mensagem||'')}</span></button><div class="support-ticket-controls"><label>Status<select data-ticket-status="${t.id}"><option value="novo" ${t.status==='novo'?'selected':''}>Novo</option><option value="em_andamento" ${t.status==='em_andamento'?'selected':''}>Em andamento</option><option value="resolvido" ${t.status==='resolvido'?'selected':''}>Resolvido</option></select></label><button type="button" class="secondary-button" data-ticket-delete="${t.id}">Excluir</button></div></article>`).join('')||'<p class="admin-empty">Nenhum atendimento recebido.</p>'}</div><div class="support-conversation"><h3>${supportThread?(adminTickets.find(t=>t.id===supportThread)?.assunto||'Conversa'): 'Selecione um atendimento'}</h3><div class="support-messages">${supportThread?supportMessagesHtml():'<p class="admin-empty">Selecione uma conversa para responder.</p>'}</div>${supportThread?`<form id="support-reply-form" class="support-compose"><textarea name="conteudo" placeholder="Digite sua resposta"></textarea><label class="support-file">Anexar QR Code, imagem ou PDF<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label><button class="primary-button">Enviar resposta</button></form>`:''}</div></div></section></main>`;
+  const deletionQueue = adminDeletionRequests.map(request => {
+    const when = request.executar_em ? new Date(request.executar_em).toLocaleString('pt-BR') : 'Ainda não confirmado';
+    const status = { solicitada: 'Aguardando confirmação', aprovada: 'Confirmada', processando: 'Processando', falhou: 'Falha — nova tentativa automática' }[request.status] || request.status;
+    return `<article class="admin-merchant"><div class="admin-merchant-info"><strong>${esc(request.comerciante_nome||request.email||'Comerciante')}</strong><span>${esc(request.email||'')}</span><small>${esc(request.loja_nome||'Loja')} · Solicitação ${new Date(request.solicitada_em).toLocaleString('pt-BR')}</small>${request.motivo?`<small>Observação: ${esc(request.motivo)}</small>`:''}</div><div class="admin-merchant-status"><b class="admin-status ${request.status==='solicitada'?'pending':'blocked'}">${esc(status)}</b><small>Execução prevista: ${esc(when)}</small>${request.ultimo_erro?'<small>O sistema tentará novamente automaticamente.</small>':''}</div><div class="admin-actions">${request.status==='solicitada'?`<button class="primary-button" data-deletion-action="confirm" data-deletion-id="${request.id}">Confirmar e iniciar 30 dias</button><button class="secondary-button" data-deletion-action="reject" data-deletion-id="${request.id}">Recusar</button>`:''}${request.status==='aprovada'?`<button class="secondary-button" data-deletion-action="cancel" data-deletion-id="${request.id}">Cancelar encerramento</button>`:''}</div></article>`;
+  }).join('');
+  document.querySelector('.support-admin')?.insertAdjacentHTML('beforebegin',`<section class="admin-list"><div class="admin-list-heading"><div><h2>Encerramentos e exclusão de dados</h2><p>A confirmação suspende a loja e inicia o prazo de 30 dias. A assinatura expirada não inicia esse processo.</p></div><button class="secondary-button" data-deletion-refresh>Atualizar</button></div>${adminDeletionRequestsError?`<p role="alert">Não foi possível carregar as solicitações: ${esc(adminDeletionRequestsError)}</p>`:deletionQueue||'<p class="admin-empty">Nenhuma solicitação pendente.</p>'}</section>`);
+  document.querySelector('[data-deletion-refresh]')?.addEventListener('click',async()=>{try{await loadAdminDeletionRequests();adminPanel();}catch(error){notify(error.message);}});
+  document.querySelectorAll('[data-deletion-action]').forEach(button=>button.addEventListener('click',async()=>{
+    const action=button.dataset.deletionAction;
+    const promptText=action==='confirm'?'Confirmar o encerramento? A loja será suspensa agora e o prazo de 30 dias começará.':action==='reject'?'Recusar esta solicitação?':'Cancelar o encerramento antes da execução?';
+    if(!confirm(promptText))return;
+    button.disabled=true;
+    try{
+      await supportRequest(`/api/admin/data-deletion-requests/${encodeURIComponent(button.dataset.deletionId)}`,'PATCH',{action});
+      await loadAdminMerchants();
+      adminPanel();
+      notify(action==='confirm'?'Encerramento confirmado; prazo de 30 dias iniciado.':'Solicitação atualizada.');
+    }catch(error){button.disabled=false;notify(error.message);}
+  }));
   bindSupportPreviews();
   document.querySelector('[data-support-refresh]')?.addEventListener('click',async()=>{try{await loadAdminTickets();adminPanel();}catch(e){notify(e.message);}});
   document.querySelectorAll('[data-admin-thread]').forEach(b=>b.onclick=()=>openSupportThread(b.dataset.adminThread,true));
@@ -947,6 +1007,9 @@ async function bootstrap() {
       clearInterval(window.__pedeiaLiveRefresh);
       window.__pedeiaLiveRefresh = null;
       stateKey = baseStateKey;
+      merchantDeletionRequest = null;
+      merchantDeletionRequestLoadedFor = null;
+      merchantDeletionRequestError = null;
       render();
     } else if (authenticatedUser) {
       checkAdmin().then(async (admin) => {
@@ -1643,7 +1706,7 @@ function merchantPanel() {
 
   bindMerchant();
   initTutorialForView();
-  if(page==='support') bindSupportMerchant();
+  if(page==='support') { bindSupportMerchant(); bindDataDeletionRequest(); }
   if(page==='couriers'){bindCouriers();if(!couriersLoaded&&!couriersLoading){couriersLoading=true;loadCouriers().then(()=>{if(state.view==='couriers')render();}).catch(e=>notify(e.message)).finally(()=>{couriersLoading=false;});}}
   document.querySelectorAll('.settings-disclosure').forEach((item) => {
     item.open = openDisclosures.has(item.dataset.disclosure);
