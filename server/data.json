@@ -1,9 +1,6 @@
 {
   "view": "dashboard",
   "customerView": "menu",
-  "ui": {
-    "openSections": {}
-  },
   "merchant": {
     "name": "João da Silva",
     "email": "joao@exemplo.com",
@@ -52,7 +49,10 @@
         "open": "12:00",
         "close": "20:00"
       }
-    }
+    },
+    "themeColor": "#b9362b",
+    "cover": "",
+    "storefront": {}
   },
   "categories": [
     "Lanches",
@@ -94,24 +94,15 @@
   "cart": [],
   "orderQuery": "",
   "orderFilter": "",
+  "historyPeriod": "all",
+  "chatFilter": "all",
+  "chatStatusFilter": "all",
   "delivery": {
     "pickup": true,
     "delivery": true,
     "pickupMinutes": 20,
     "deliveryMinutes": 45,
     "autoAccept": false
-  },
-  "paymentConfig": {
-    "cash": true,
-    "pix": true,
-    "credit": true,
-    "debit": true,
-    "cardTypes": "Visa, Mastercard, Elo",
-    "cardFee": 0,
-    "maxInstallments": 3,
-    "needsChange": true,
-    "changeFor": "Até R$ 50,00",
-    "customerMessage": "Pagamento disponível em dinheiro, cartão ou pix."
   },
   "printerConfig": {
     "mode": "cabo",

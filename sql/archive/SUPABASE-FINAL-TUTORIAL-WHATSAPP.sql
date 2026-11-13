@@ -1,0 +1,7 @@
+-- ARQUIVO LEGADO / NÃO EXECUTAR ISOLADAMENTE
+-- Esta versão do PedeIA usa a estrutura real de contato administrativo:
+-- id UUID, nome TEXT, whatsapp TEXT, ativo BOOLEAN, created_at, updated_at.
+-- Para instalar/atualizar esta versão, execute SOMENTE:
+-- SUPABASE-CONSOLIDADO-FINAL.sql
+-- Este arquivo foi mantido apenas para referência histórica e não contém
+-- migrations antigas com id=1/name/phone para evitar conflito com o banco atual.

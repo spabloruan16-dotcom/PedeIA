@@ -1,103 +1,78 @@
-# PedeIA — versão consolidada atualizada
+# PedeIA
 
-Esta versão reúne a base mestre e as funcionalidades adicionadas nesta rodada.
+Aplicacao de pedidos com painel do comerciante, vitrine publica, acompanhamento de pedidos e painel administrativo.
 
-## Principais módulos
+## Estrutura
 
-- Autenticação Supabase e bloqueio por assinatura.
-- Painel do comerciante e vitrine pública.
-- Pedidos ativos e histórico.
-- Conversas de pedidos ativos.
-- Suporte com anexos.
-- Entregadores com link individual persistente, GPS e histórico.
-- Localização dos entregadores no mapa.
-- Relatórios de vendas.
-- Promoções automáticas.
-- Personalização da vitrine.
-- Categorias e produtos com opções/adicionais.
-- Impressoras e configurações de impressão.
-- Tutorial interativo.
-- Contato administrativo por WhatsApp.
+- `pages/`: paginas HTML publicas.
+- `css/`: folhas de estilo separadas por funcao. A ordem no `pages/index.html` preserva a cascata atual.
+- `js/`: aplicacao frontend.
+- `server.js`: ponto de entrada do servidor Node e APIs.
+- `server/`: dados locais e arquivos de apoio do servidor.
+- `sql/pedeia-consolidado.sql`: migracao ativa unica para o Supabase.
+- `sql/archive/`: scripts anteriores e schema legado, guardados apenas como referencia. Nao execute esses arquivos isoladamente.
+- `docs/`: tutoriais, notas de implementacao e auditorias.
+- `assets/`: imagens e outros recursos estaticos.
 
-## Banco
+O servidor preserva as URLs publicas existentes (`/`, `/app.js`, `/acompanhar`, `/motoboy`, `/privacidade`, `/termos` e `/exclusao-de-dados`) apesar da organizacao fisica em pastas.
 
-Execute `SUPABASE-CONSOLIDADO-FINAL.sql` no SQL Editor do Supabase.
+## Executar localmente
 
-O SQL é incremental e não usa `id = 1` para o contato administrativo. A tabela esperada é:
+Requer Node.js 20 ou superior.
 
-- `id` UUID
-- `nome` text
-- `whatsapp` text
-- `ativo` boolean
+```powershell
+npm install
+npm start
+```
 
-## Render
+O servidor inicia em `http://localhost:4173` por padrao. Defina `PORT` para usar outra porta.
 
-Configure pelo menos:
+## Banco de dados
+
+O script [sql/pedeia-consolidado.sql](./sql/pedeia-consolidado.sql) reune as migracoes incrementais ativas. Ele pressupoe que as tabelas-base atuais da aplicacao ja existem no Supabase; nao e um instalador para um banco vazio. Antes de aplica-lo em producao, faca backup e revise as mudancas.
+
+Os arquivos em `sql/archive/`, incluindo o antigo `schema.sql`, nao fazem parte da migracao consolidada e nao devem ser executados.
+
+## Variaveis de ambiente
+
+Configure no ambiente do servidor, nunca no navegador:
 
 - `DATABASE_URL`
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
-- `PUBLIC_BASE_URL`
-- `ORS_API_KEY` para otimização de rotas
+- `SUPABASE_SERVICE_ROLE_KEY` para rotinas administrativas que exijam acesso privilegiado
+- `PUBLIC_BASE_URL` para links publicos e callback de exclusao de dados
+- `ORS_API_KEY` para otimizacao de rotas
+- `PORT` (opcional)
 
-## Observação
+Nunca publique senhas, `DATABASE_URL` ou `SUPABASE_SERVICE_ROLE_KEY`.
 
-As novas rotas de relatórios, promoções, localização e otimização ficam protegidas pela sessão autenticada do comerciante.
+## WhatsApp
 
+O unico uso mantido e o botao **Falar com o administrador**: o comerciante inicia a conversa no proprio WhatsApp usando o telefone informado no painel administrativo. O PedeIA nao conecta contas de loja nem recebe ou envia mensagens pela API do WhatsApp.
 
-## Instalação desta versão consolidada
+## Paginas publicas
 
-Execute `SUPABASE-CONSOLIDADO-FINAL.sql` no Supabase. Para ativar a numeração sequencial das comandas, execute também `numeracao-comandas.sql` depois; ele adiciona e preenche os números dos pedidos existentes e cria o contador por loja. Os arquivos SQL marcados como LEGADO são apenas referência histórica e não devem ser executados isoladamente.
+- Vitrine: `/`
+- Acompanhamento: `/acompanhar`
+- Entregadores: `/motoboy`
+- Privacidade: `/privacidade`
+- Termos: `/termos`
+- Exclusao de dados: `/exclusao-de-dados`
 
-### Variáveis do Render
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `ORS_API_KEY` (necessária para otimização ORS; sem ela o sistema ainda geocodifica e preserva a ordem original)
-
-## Integracao oficial com WhatsApp Business
-
-A caixa **Conversas** aceita uma conta WhatsApp Business por loja, conectada pelo fluxo oficial **Embedded Signup v4** da Meta. Cada comerciante autoriza os próprios ativos; o PedeIA não pede nem envia tokens pelo navegador.
-
-### Preparacao do Meta for Developers
-
-1. Crie/configure o app da Meta com WhatsApp Cloud API e Facebook Login for Business.
-2. Crie uma configuracao de Embedded Signup v4 com o produto Cloud API e copie o App ID e o ID da configuracao.
-3. Configure a URL HTTPS `https://SEU-DOMINIO/api/whatsapp/webhook`, o token de verificacao abaixo e assine o campo `messages` da conta WhatsApp Business.
-4. Conclua as permissoes e revisao de app/acesso avancado exigidas pela Meta para os comerciantes que serao conectados.
-5. Execute `whatsapp-integracao.sql` no SQL Editor do Supabase depois do schema principal.
-6. Cadastre as variaveis no Render e reinicie o servico:
-
-```text
-WHATSAPP_META_APP_ID=ID_DO_APP_META
-WHATSAPP_META_APP_SECRET=SEGREDO_DO_APP_META
-WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID=ID_DA_CONFIGURACAO_V4
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=SEGREDO_FORTE_GERADO_POR_VOCE
-WHATSAPP_TOKEN_ENCRYPTION_KEY=64_CARACTERES_HEXADECIMAIS
-WHATSAPP_GRAPH_API_VERSION=v25.0
-```
-
-Gere `WHATSAPP_TOKEN_ENCRYPTION_KEY` com `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Guarde a chave em um gerenciador de segredos e mantenha-a estavel: ela criptografa os tokens salvos no banco e perde-la impede o servidor de usar/desconectar as contas existentes. Nunca coloque estes valores em `index.html`, `app.js`, no SQL ou no chat.
-
-O webhook valida a assinatura HMAC enviada pela Meta. Mensagens recebidas e enviadas sao vinculadas a loja; tokens sao armazenados criptografados com AES-256-GCM. O sistema permite resposta de texto apenas dentro da janela de atendimento de 24 horas. Fora dela, a Meta exige um modelo aprovado; o envio de modelos e anexos de midia ainda nao faz parte desta entrega.
-
-**A ativacao nao e automatica ao publicar o codigo:** depende de configurar e aprovar o app no Meta for Developers, executar a migracao, configurar as variaveis e registrar o webhook. Consulte a [documentacao Embedded Signup](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/overview), a [versao 4](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/version-4) e a [referencia de webhooks](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages).
+As paginas HTML tambem continuam acessiveis pelos caminhos antigos com extensao `.html`.
 
 ## Privacidade e exclusao de dados
 
-Paginas publicas para cadastrar na Meta:
+Paginas publicas para configurar no provedor:
 
-- Politica de Privacidade: `https://SEU-DOMINIO/privacidade`
-- Termos de Servico: `https://SEU-DOMINIO/termos`
-- Instrucoes de exclusao: `https://SEU-DOMINIO/exclusao-de-dados`
+- Politica de privacidade: `/privacidade`
+- Termos de servico: `/termos`
+- Instrucoes de exclusao: `/exclusao-de-dados`
+- Callback de exclusao (opcional): `/api/meta/data-deletion`
 
-Para ativar o fluxo e a rotina automatica:
+O fluxo de exclusao usa as tabelas criadas por `sql/pedeia-consolidado.sql`. Para habilitar o callback, configure `PUBLIC_BASE_URL` e `META_APP_SECRET` no servidor. Esse segredo e usado para validar o callback de exclusao da Meta, nao para integrar o PedeIA ao WhatsApp.
 
-1. Execute `privacidade-exclusao.sql` no SQL Editor do Supabase, depois do schema principal.
-2. No Render, configure `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`. A chave de service role deve ficar somente no servidor e nunca ser publicada no frontend.
-3. Publique o servidor e teste as tres URLs publicas.
-4. O comerciante abre a aba **Suporte** e envia o pedido de encerramento. Um administrador precisa confirmar explicitamente no painel.
-5. A confirmacao suspende a loja e inicia o prazo de 30 dias. O servidor verifica a fila a cada 15 minutos e tenta novamente automaticamente se ocorrer uma falha.
+Uma solicitacao recebida pelo callback nao apaga dados automaticamente. O administrador deve verificar e tratar a solicitacao no painel. A rotina de encerramento remove anexos e mensagens cobertos pelo fluxo e anonimiza dados pessoais conhecidos, mantendo dados de negocio quando necessario. As tabelas e mensagens antigas de integracoes anteriores com WhatsApp tambem nao sao removidas automaticamente; avalie e faca backup antes de qualquer limpeza manual.
 
-A rotina apaga anexos da Central de Atendimento, mensagens de suporte e de pedidos, dados de conexao/conversas do WhatsApp e anonimiza dados pessoais conhecidos nos pedidos, clientes e entregadores. Totais e demais dados de negocio de pedidos sao mantidos para eventual obrigacao legal. A exclusao da conta de autenticacao e concluida pela API administrativa do Supabase; falhas ficam registradas na fila e sao tentadas novamente. A expiracao da assinatura, sozinha, nunca abre uma solicitacao nem inicia o prazo.
-
-As paginas legais sao textos iniciais e devem ser revisadas por profissional juridico antes de serem usadas como documentos definitivos.
+Os textos das paginas legais sao iniciais e devem ser revisados por profissional juridico antes de uso definitivo.

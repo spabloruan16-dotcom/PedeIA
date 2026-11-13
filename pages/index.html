@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4512c">
+  <title>PedeIA | Seu pedido, do seu jeito</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/icons-and-decorations.css">
+  <link rel="stylesheet" href="/css/dashboard-and-filters.css">
+  <link rel="stylesheet" href="/css/customer-storefront.css">
+  <link rel="stylesheet" href="/css/modals-chat-and-utilities.css">
+  <link rel="stylesheet" href="/css/global-base.css">
+  <link rel="stylesheet" href="/css/sidebar-navigation.css">
+  <link rel="stylesheet" href="/css/application-theme.css?v=20261113-admin-contact">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm";
+
+    const supabaseUrl = "https://irlarzynvelqvihoxtpj.supabase.co";
+    const supabasePublishableKey = "sb_publishable_Zm5dduva-m9IenkcqW509Q_t7tBm6Zj";
+
+    // Create one client and expose the name expected by the existing app.js.
+    window.pedeiaSupabase = createClient(supabaseUrl, supabasePublishableKey);
+
+    const appScript = document.createElement("script");
+    appScript.src = "/app.js?v=20260215-data-deletion";
+    appScript.onload = () => {
+      if (typeof window.bootstrap === "function") {
+        window.bootstrap().catch((error) => {
+          console.error("Falha ao iniciar o PedeIA:", error);
+        });
+      } else {
+        console.error("Falha ao iniciar o PedeIA: bootstrap() não encontrado.");
+      }
+    };
+    appScript.onerror = () => {
+      console.error("Falha ao carregar /app.js");
+    };
+    document.body.appendChild(appScript);
+  </script>
+</body>
+</html>

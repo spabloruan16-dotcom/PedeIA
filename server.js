@@ -190,397 +190,16 @@ function readRequestBuffer(request, limit = 2_000_000) {
   });
 }
 
-function whatsappSettings() {
-  const graphApiVersion = process.env.WHATSAPP_GRAPH_API_VERSION || "v25.0";
-  const encryptionKey = process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY || "";
-  const encryptionKeyValid = /^[0-9a-f]{64}$/i.test(encryptionKey);
-  const graphApiVersionValid = /^v\d+\.\d+$/.test(graphApiVersion);
-  return {
-    appId: process.env.WHATSAPP_META_APP_ID || "",
-    configId: process.env.WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID || "",
-    appSecret: process.env.WHATSAPP_META_APP_SECRET || "",
-    verifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "",
-    encryptionKey: encryptionKeyValid ? Buffer.from(encryptionKey, "hex") : null,
-    graphApiVersion,
-    configured: Boolean(
-      process.env.WHATSAPP_META_APP_ID &&
-      process.env.WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID &&
-      process.env.WHATSAPP_META_APP_SECRET &&
-      process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN &&
-      encryptionKeyValid &&
-      graphApiVersionValid
-    )
-  };
-}
-
-function encryptWhatsAppToken(token) {
-  const settings = whatsappSettings();
-  if (!settings.encryptionKey) throw new Error("WHATSAPP_TOKEN_ENCRYPTION_KEY deve ter 64 caracteres hexadecimais");
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", settings.encryptionKey, iv);
-  const ciphertext = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
-  return {
-    ciphertext: ciphertext.toString("base64"),
-    iv: iv.toString("base64"),
-    tag: cipher.getAuthTag().toString("base64")
-  };
-}
-
-function decryptWhatsAppToken(row) {
-  const settings = whatsappSettings();
-  if (!settings.encryptionKey) throw new Error("WHATSAPP_TOKEN_ENCRYPTION_KEY nao configurada corretamente");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", settings.encryptionKey, Buffer.from(row.access_token_iv, "base64"));
-  decipher.setAuthTag(Buffer.from(row.access_token_tag, "base64"));
-  return Buffer.concat([
-    decipher.update(Buffer.from(row.access_token_ciphertext, "base64")),
-    decipher.final()
-  ]).toString("utf8");
-}
-
-async function whatsappGraphRequest(endpoint, options = {}) {
-  const settings = whatsappSettings();
-  if (!/^v\d+\.\d+$/.test(settings.graphApiVersion)) throw new Error("WHATSAPP_GRAPH_API_VERSION invalida");
-  const url = new URL(`https://graph.facebook.com/${settings.graphApiVersion}/${endpoint.replace(/^\/+/, "")}`);
-  for (const [key, value] of Object.entries(options.query || {})) {
-    url.searchParams.set(key, String(value));
+function normalizeAdminWhatsAppNumber(value) {
+  let digits = String(value || "").replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("0")) {
+    if (digits.length === 11 || digits.length === 12) digits = digits.slice(1);
+    else if (digits.length === 13 || digits.length === 14) digits = digits.slice(3);
   }
-  const headers = { Accept: "application/json" };
-  if (options.token) headers.Authorization = `Bearer ${options.token}`;
-  if (options.body) headers["Content-Type"] = "application/json";
-  const response = await fetch(url, {
-    method: options.method || "GET",
-    headers,
-    ...(options.body ? { body: JSON.stringify(options.body) } : {})
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = String(result.error?.message || result.error?.error_user_msg || "A Meta recusou a solicitacao").slice(0, 500);
-    const error = new Error(detail);
-    error.code = "WHATSAPP_META_ERROR";
-    throw error;
-  }
-  return result;
-}
-
-async function merchantWhatsAppContext(request) {
-  const user = await authenticatedUser(request);
-  if (!user) return { error: "Sessao invalida ou email nao confirmado", status: 401 };
-  if (!subscriptionPool) return { error: "Banco de dados indisponivel", status: 503 };
-  const merchant = await subscriptionPool.query(
-    "SELECT status_assinatura,fim_assinatura FROM public.comerciantes WHERE id=$1",
-    [user.id]
-  );
-  if (!merchant.rowCount) return { error: "Perfil de comerciante nao encontrado", status: 403 };
-  const subscription = merchant.rows[0];
-  if (subscription.status_assinatura !== "ativa" || (subscription.fim_assinatura && new Date(subscription.fim_assinatura).getTime() < Date.now())) {
-    return { error: "Assinatura inativa", status: 403 };
-  }
-  const shop = await subscriptionPool.query(
-    "SELECT id FROM public.lojas WHERE merchant_id=$1 ORDER BY created_at LIMIT 1",
-    [user.id]
-  );
-  if (!shop.rowCount) return { error: "Loja nao encontrada", status: 404 };
-  return { user, shopId: shop.rows[0].id };
-}
-
-function validWhatsAppWebhookSignature(rawBody, signature, appSecret) {
-  if (!signature || !appSecret || !/^sha256=[0-9a-f]{64}$/i.test(signature)) return false;
-  const expected = Buffer.from(`sha256=${crypto.createHmac("sha256", appSecret).update(rawBody).digest("hex")}`);
-  const received = Buffer.from(signature);
-  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
-}
-
-async function handleWhatsAppWebhook(request, response) {
-  const settings = whatsappSettings();
-  if (request.method === "GET") {
-    if (!settings.verifyToken) return respondJson(response, 503, { error: "Token de verificacao do webhook nao configurado" });
-    const mode = request.url ? new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("hub.mode") : null;
-    const token = request.url ? new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("hub.verify_token") : null;
-    const challenge = request.url ? new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("hub.challenge") : null;
-    if (mode !== "subscribe" || token !== settings.verifyToken || !challenge) {
-      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
-      response.end("Forbidden");
-      return;
-    }
-    response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
-    response.end(challenge);
-    return;
-  }
-  if (request.method !== "POST") return respondJson(response, 405, { error: "Metodo nao permitido" });
-  if (!settings.appSecret) return respondJson(response, 503, { error: "Segredo do app Meta nao configurado para validar webhooks" });
-  const rawBody = await readRequestBuffer(request);
-  if (!validWhatsAppWebhookSignature(rawBody, request.headers["x-hub-signature-256"], settings.appSecret)) {
-    return respondJson(response, 401, { error: "Assinatura do webhook invalida" });
-  }
-  if (!subscriptionPool) return respondJson(response, 503, { error: "Banco de dados indisponivel" });
-  let payload;
-  try {
-    payload = JSON.parse(rawBody.toString("utf8"));
-  } catch {
-    return respondJson(response, 400, { error: "JSON do webhook invalido" });
-  }
-  if (payload.object !== "whatsapp_business_account") return respondJson(response, 200, { ok: true });
-
-  for (const entry of payload.entry || []) {
-    for (const change of entry.changes || []) {
-      if (change.field !== "messages") continue;
-      const value = change.value || {};
-      const phoneNumberId = String(value.metadata?.phone_number_id || "");
-      if (!phoneNumberId) continue;
-      const connection = await subscriptionPool.query(
-        "SELECT loja_id FROM public.whatsapp_connections WHERE phone_number_id=$1 AND status='connected' LIMIT 1",
-        [phoneNumberId]
-      );
-      if (!connection.rowCount) continue;
-      const shopId = connection.rows[0].loja_id;
-
-      for (const status of value.statuses || []) {
-        if (!status.id || !["sent", "delivered", "read", "failed"].includes(status.status)) continue;
-        const detail = status.status === "failed"
-          ? String(status.errors?.[0]?.title || status.errors?.[0]?.message || "Falha no envio").slice(0, 500)
-          : null;
-        await subscriptionPool.query(
-          "UPDATE public.whatsapp_messages SET status=$2,error_detail=$3 WHERE provider_message_id=$1",
-          [status.id, status.status, detail]
-        );
-      }
-
-      for (const message of value.messages || []) {
-        const customerWaId = String(message.from || "");
-        const providerMessageId = String(message.id || "");
-        if (!customerWaId || !providerMessageId) continue;
-        const contact = (value.contacts || []).find((item) => String(item.wa_id || "") === customerWaId);
-        const messageType = String(message.type || "unsupported").slice(0, 40);
-        const content = String(
-          message.text?.body ||
-          message.button?.text ||
-          message.interactive?.button_reply?.title ||
-          message.interactive?.list_reply?.title ||
-          `[Mensagem ${messageType}]`
-        ).slice(0, 4000);
-        const timestamp = Number(message.timestamp);
-        const messageDate = Number.isFinite(timestamp) ? new Date(timestamp * 1000) : new Date();
-        const conversation = await subscriptionPool.query(
-          `INSERT INTO public.whatsapp_conversations
-             (loja_id,customer_wa_id,customer_name,last_message_at,last_customer_message_at)
-           VALUES($1,$2,$3,$4,$4)
-           ON CONFLICT (loja_id,customer_wa_id) DO UPDATE SET
-             customer_name=COALESCE(EXCLUDED.customer_name,public.whatsapp_conversations.customer_name),
-             last_message_at=GREATEST(public.whatsapp_conversations.last_message_at,EXCLUDED.last_message_at),
-             last_customer_message_at=GREATEST(COALESCE(public.whatsapp_conversations.last_customer_message_at,EXCLUDED.last_customer_message_at),EXCLUDED.last_customer_message_at),
-             updated_at=NOW()
-           RETURNING id`,
-          [shopId, customerWaId, String(contact?.profile?.name || "").slice(0, 120) || null, messageDate]
-        );
-        const inserted = await subscriptionPool.query(
-          `INSERT INTO public.whatsapp_messages(conversation_id,provider_message_id,direction,message_type,content,status,created_at)
-           VALUES($1,$2,'inbound',$3,$4,'received',$5)
-           ON CONFLICT(provider_message_id) DO NOTHING RETURNING id`,
-          [conversation.rows[0].id, providerMessageId, messageType, content, messageDate]
-        );
-        if (inserted.rowCount) {
-          await subscriptionPool.query(
-            "UPDATE public.whatsapp_conversations SET unread_count=unread_count+1,updated_at=NOW() WHERE id=$1",
-            [conversation.rows[0].id]
-          );
-        }
-      }
-    }
-  }
-  return respondJson(response, 200, { ok: true });
-}
-
-async function routeMerchantWhatsApp(request, response, pathname) {
-  const context = await merchantWhatsAppContext(request);
-  if (context.error) return respondJson(response, context.status, { error: context.error });
-  const { shopId } = context;
-  const settings = whatsappSettings();
-  if (pathname === "/api/merchant/whatsapp" && request.method === "GET") {
-    const connection = await subscriptionPool.query(
-      "SELECT phone_number_id,display_phone_number,status,connected_at FROM public.whatsapp_connections WHERE loja_id=$1 LIMIT 1",
-      [shopId]
-    );
-    const conversations = connection.rowCount
-      ? await subscriptionPool.query(
-        `SELECT c.id,c.customer_wa_id,c.customer_name,c.last_message_at,c.last_customer_message_at,c.unread_count,
-                m.content AS last_message,m.direction AS last_direction
-           FROM public.whatsapp_conversations c
-           LEFT JOIN LATERAL (
-             SELECT content,direction FROM public.whatsapp_messages
-              WHERE conversation_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1
-           ) m ON true
-          WHERE c.loja_id=$1 ORDER BY c.last_message_at DESC LIMIT 200`,
-        [shopId]
-      )
-      : { rows: [] };
-    return respondJson(response, 200, {
-      configured: settings.configured,
-      appId: settings.appId,
-      configId: settings.configId,
-      graphApiVersion: settings.graphApiVersion,
-      connected: connection.rowCount > 0 && connection.rows[0].status === "connected",
-      account: connection.rows[0] || null,
-      conversations: conversations.rows
-    });
-  }
-
-  if (pathname === "/api/merchant/whatsapp" && request.method === "DELETE") {
-    const connection = await subscriptionPool.query(
-      "SELECT waba_id,access_token_ciphertext,access_token_iv,access_token_tag FROM public.whatsapp_connections WHERE loja_id=$1 LIMIT 1",
-      [shopId]
-    );
-    if (!connection.rowCount) return respondJson(response, 404, { error: "Nenhum WhatsApp conectado a esta loja" });
-    const token = decryptWhatsAppToken(connection.rows[0]);
-    await whatsappGraphRequest(`${connection.rows[0].waba_id}/subscribed_apps`, {
-      method: "DELETE",
-      token
-    });
-    await subscriptionPool.query("DELETE FROM public.whatsapp_connections WHERE loja_id=$1", [shopId]);
-    return respondJson(response, 200, { ok: true });
-  }
-
-  if (pathname === "/api/merchant/whatsapp/connect" && request.method === "POST") {
-    if (!settings.configured || !settings.encryptionKey) {
-      return respondJson(response, 503, { error: "A integracao do WhatsApp ainda nao foi configurada no servidor" });
-    }
-    const body = await readRequestJson(request);
-    const code = String(body.code || "");
-    const wabaId = String(body.waba_id || "");
-    const phoneNumberId = String(body.phone_number_id || "");
-    const pin = String(body.pin || "");
-    if (!code || code.length > 4096 || !/^\d{6}$/.test(pin) || !/^\d{5,30}$/.test(wabaId) || !/^\d{5,30}$/.test(phoneNumberId)) {
-      return respondJson(response, 400, { error: "Dados de conexão incompletos. Confira o cadastro e o PIN de 6 dígitos." });
-    }
-    const existing = await subscriptionPool.query(
-      "SELECT phone_number_id FROM public.whatsapp_connections WHERE loja_id=$1",
-      [shopId]
-    );
-    if (existing.rowCount && existing.rows[0].phone_number_id !== phoneNumberId) {
-      return respondJson(response, 409, { error: "Desconecte o número atual antes de conectar outro WhatsApp." });
-    }
-    const otherOwner = await subscriptionPool.query(
-      "SELECT loja_id FROM public.whatsapp_connections WHERE phone_number_id=$1 AND loja_id<>$2 LIMIT 1",
-      [phoneNumberId, shopId]
-    );
-    if (otherOwner.rowCount) return respondJson(response, 409, { error: "Este número do WhatsApp já está conectado a outra loja." });
-    const exchangeUrl = new URL(`https://graph.facebook.com/${settings.graphApiVersion}/oauth/access_token`);
-    exchangeUrl.searchParams.set("client_id", settings.appId);
-    exchangeUrl.searchParams.set("client_secret", settings.appSecret);
-    exchangeUrl.searchParams.set("code", code);
-    const exchangeResponse = await fetch(exchangeUrl, { headers: { Accept: "application/json" } });
-    const exchange = await exchangeResponse.json().catch(() => ({}));
-    if (!exchangeResponse.ok || !exchange.access_token) {
-      const detail = String(exchange.error?.message || "Nao foi possivel validar a autorizacao do Meta").slice(0, 400);
-      return respondJson(response, 400, { error: detail });
-    }
-
-    if (!existing.rowCount) {
-      await whatsappGraphRequest(`${phoneNumberId}/register`, {
-        method: "POST",
-        token: exchange.access_token,
-        body: { messaging_product: "whatsapp", pin }
-      });
-    }
-    const phone = await whatsappGraphRequest(phoneNumberId, {
-      token: exchange.access_token,
-      query: { fields: "display_phone_number" }
-    });
-    await whatsappGraphRequest(`${wabaId}/subscribed_apps`, {
-      method: "POST",
-      token: exchange.access_token,
-      body: {}
-    });
-    const encrypted = encryptWhatsAppToken(exchange.access_token);
-    await subscriptionPool.query(
-      `INSERT INTO public.whatsapp_connections
-         (loja_id,waba_id,phone_number_id,display_phone_number,access_token_ciphertext,access_token_iv,access_token_tag,status,connected_at,updated_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,'connected',NOW(),NOW())
-       ON CONFLICT (loja_id) DO UPDATE SET
-         waba_id=EXCLUDED.waba_id,phone_number_id=EXCLUDED.phone_number_id,
-         display_phone_number=EXCLUDED.display_phone_number,
-         access_token_ciphertext=EXCLUDED.access_token_ciphertext,
-         access_token_iv=EXCLUDED.access_token_iv,access_token_tag=EXCLUDED.access_token_tag,
-         status='connected',connected_at=NOW(),updated_at=NOW()`,
-      [shopId, wabaId, phoneNumberId, String(phone.display_phone_number || "").slice(0, 40) || null, encrypted.ciphertext, encrypted.iv, encrypted.tag]
-    );
-    return respondJson(response, 200, { ok: true });
-  }
-
-  const messagesMatch = pathname.match(/^\/api\/merchant\/whatsapp\/conversations\/([0-9a-f-]{36})\/messages$/i);
-  if (messagesMatch && ["GET", "POST"].includes(request.method)) {
-    const conversationId = messagesMatch[1];
-    const connection = await subscriptionPool.query(
-      "SELECT waba_id,phone_number_id,access_token_ciphertext,access_token_iv,access_token_tag FROM public.whatsapp_connections WHERE loja_id=$1 AND status='connected' LIMIT 1",
-      [shopId]
-    );
-    if (!connection.rowCount) return respondJson(response, 409, { error: "Conecte um WhatsApp Business para abrir esta conversa" });
-    const conversation = await subscriptionPool.query(
-      "SELECT id,customer_wa_id,last_customer_message_at FROM public.whatsapp_conversations WHERE id=$1 AND loja_id=$2 LIMIT 1",
-      [conversationId, shopId]
-    );
-    if (!conversation.rowCount) return respondJson(response, 404, { error: "Conversa nao encontrada" });
-
-    if (request.method === "GET") {
-      await subscriptionPool.query("UPDATE public.whatsapp_conversations SET unread_count=0 WHERE id=$1", [conversationId]);
-      const messages = await subscriptionPool.query(
-        `SELECT id,direction,message_type,content,status,error_detail,created_at FROM (
-           SELECT id,direction,message_type,content,status,error_detail,created_at
-             FROM public.whatsapp_messages WHERE conversation_id=$1
-            ORDER BY created_at DESC,id DESC LIMIT 500
-         ) recent ORDER BY created_at ASC,id ASC`,
-        [conversationId]
-      );
-      return respondJson(response, 200, { mensagens: messages.rows });
-    }
-
-    const body = await readRequestJson(request);
-    const content = String(body.conteudo || "").trim();
-    if (!content || content.length > 2000) return respondJson(response, 400, { error: "A mensagem deve ter entre 1 e 2000 caracteres" });
-    const lastInboundAt = conversation.rows[0].last_customer_message_at
-      ? new Date(conversation.rows[0].last_customer_message_at).getTime()
-      : 0;
-    if (!lastInboundAt || Date.now() - lastInboundAt > 24 * 60 * 60 * 1000) {
-      return respondJson(response, 409, { error: "A janela de atendimento de 24 horas expirou. Para iniciar uma nova conversa, é necessário usar um modelo de mensagem aprovado pela Meta." });
-    }
-    const queued = await subscriptionPool.query(
-      `INSERT INTO public.whatsapp_messages(conversation_id,direction,message_type,content,status)
-       VALUES($1,'outbound','text',$2,'sending') RETURNING id`,
-      [conversationId, content]
-    );
-    try {
-      const token = decryptWhatsAppToken(connection.rows[0]);
-      const result = await whatsappGraphRequest(`${connection.rows[0].phone_number_id}/messages`, {
-        method: "POST",
-        token,
-        body: {
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: conversation.rows[0].customer_wa_id,
-          type: "text",
-          text: { preview_url: false, body: content }
-        }
-      });
-      const providerMessageId = String(result.messages?.[0]?.id || "");
-      if (!providerMessageId) throw new Error("A Meta nao retornou o identificador da mensagem enviada");
-      const saved = await subscriptionPool.query(
-        "UPDATE public.whatsapp_messages SET provider_message_id=$2,status='sent',error_detail=NULL WHERE id=$1 RETURNING id,direction,message_type,content,status,created_at",
-        [queued.rows[0].id, providerMessageId]
-      );
-      await subscriptionPool.query(
-        "UPDATE public.whatsapp_conversations SET last_message_at=NOW(),updated_at=NOW() WHERE id=$1",
-        [conversationId]
-      );
-      return respondJson(response, 201, { mensagem: saved.rows[0] });
-    } catch (error) {
-      await subscriptionPool.query(
-        "UPDATE public.whatsapp_messages SET status='failed',error_detail=$2 WHERE id=$1",
-        [queued.rows[0].id, String(error.message || "Falha no envio").slice(0, 500)]
-      );
-      throw error;
-    }
-  }
-
-  return respondJson(response, 404, { error: "Rota do WhatsApp nao encontrada" });
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
+  if (digits.length >= 12 && digits.length <= 15) return digits;
+  return null;
 }
 
 function shopDto(row) {
@@ -904,6 +523,225 @@ async function userMerchant(userId) {
   const r = await subscriptionPool.query("SELECT id FROM public.comerciantes WHERE id=$1 LIMIT 1", [userId]);
   return r.rows[0] || null;
 }
+
+function decodeBase64Url(value) {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  return Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
+function verifyMetaSignedRequest(signedRequest, appSecret) {
+  if (typeof signedRequest !== "string" || signedRequest.length > 30_000) return null;
+  const separator = signedRequest.indexOf(".");
+  if (separator <= 0 || separator !== signedRequest.lastIndexOf(".")) return null;
+  const signature = decodeBase64Url(signedRequest.slice(0, separator));
+  const encodedPayload = signedRequest.slice(separator + 1);
+  const payloadBytes = decodeBase64Url(encodedPayload);
+  if (!signature || signature.length !== 32 || !payloadBytes) return null;
+
+  const expected = crypto.createHmac("sha256", appSecret).update(encodedPayload).digest();
+  if (!crypto.timingSafeEqual(signature, expected)) return null;
+
+  let payload;
+  try {
+    payload = JSON.parse(payloadBytes.toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (payload.algorithm !== "HMAC-SHA256" || !/^\d{1,40}$/.test(String(payload.user_id || ""))) return null;
+  if (payload.issued_at !== undefined && Number(payload.issued_at) > Math.floor(Date.now() / 1000) + 300) return null;
+  return payload;
+}
+
+function renderMetaDeletionStatus(response, status, code) {
+  const labels = {
+    recebida: ["Solicitação recebida", "A Meta enviou seu pedido ao PedeIA. Para proteger sua conta, nossa equipe precisa confirmar qual conta PedeIA corresponde a este protocolo."],
+    em_analise: ["Em análise", "Nossa equipe está verificando a solicitação e a conta relacionada."],
+    concluida: ["Concluída", "A equipe registrou a conclusão do tratamento desta solicitação."],
+    sem_dados: ["Nenhum dado correspondente localizado", "Após a verificação, não foram localizados dados do PedeIA associados a esta solicitação."],
+    recusada: ["Não foi possível concluir", "A equipe não conseguiu validar a solicitação. Entre em contato com o suporte para obter orientação."]
+  };
+  const [title, description] = labels[status] || ["Status indisponível", "Entre em contato com o suporte para consultar sua solicitação."];
+  const html = `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Status da exclusão de dados | PedeIA</title><style>body{font:16px/1.6 Arial,sans-serif;background:#f7f7f5;color:#252525;margin:0;padding:24px}main{max-width:680px;margin:6vh auto;background:white;padding:32px;border-radius:16px;box-shadow:0 8px 32px #0001}h1{color:#b9362b}code{overflow-wrap:anywhere}a{color:#a52e24}</style><main><p><a href="/">PedeIA</a></p><h1>${title}</h1><p>${description}</p><p>Protocolo: <code>${code}</code></p><p>O identificador recebido da Meta não é associado automaticamente a uma conta PedeIA. Nenhum dado de uma conta é excluído sem verificação segura. Para solicitar a associação, envie este protocolo para <a href="mailto:maktubcompanny@gmail.com">maktubcompanny@gmail.com</a>.</p><p><a href="/exclusao-de-dados">Instruções de exclusão de dados</a></p></main></html>`;
+  response.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Robots-Tag": "noindex, nofollow"
+  });
+  response.end(html);
+}
+
+async function routeMetaDataDeletion(request, response, pathname) {
+  const appSecret = process.env.META_APP_SECRET || "";
+  if (!appSecret) return respondJson(response, 503, { error: "Segredo do aplicativo Meta nao configurado" });
+
+  if (pathname === "/api/meta/data-deletion" && request.method === "POST") {
+    const baseUrl = String(process.env.PUBLIC_BASE_URL || "https://pedeia.onrender.com").replace(/\/+$/, "");
+    if (!/^https:\/\//i.test(baseUrl)) {
+      return respondJson(response, 503, { error: "PUBLIC_BASE_URL deve usar HTTPS" });
+    }
+    const rawBody = await readRequestBuffer(request, 32_768);
+    const contentType = String(request.headers["content-type"] || "").toLowerCase();
+    let signedRequest = "";
+    if (contentType.includes("application/x-www-form-urlencoded")) {
+      signedRequest = new URLSearchParams(rawBody.toString("utf8")).get("signed_request") || "";
+    } else if (contentType.includes("application/json")) {
+      try {
+        signedRequest = String(JSON.parse(rawBody.toString("utf8")).signed_request || "");
+      } catch {
+        return respondJson(response, 400, { error: "Corpo JSON invalido" });
+      }
+    } else {
+      return respondJson(response, 415, { error: "Formato de requisicao nao suportado" });
+    }
+
+    const payload = verifyMetaSignedRequest(signedRequest, appSecret);
+    if (!payload) return respondJson(response, 403, { error: "Assinatura ou payload da Meta invalido" });
+    if (!subscriptionPool) return respondJson(response, 503, { error: "Banco de dados indisponivel" });
+
+    const confirmationCode = crypto.randomBytes(16).toString("hex");
+    const confirmationHash = crypto.createHash("sha256").update(confirmationCode).digest("hex");
+    const metaUserHash = crypto.createHmac("sha256", appSecret)
+      .update("meta-user:")
+      .update(String(payload.user_id))
+      .digest("hex");
+    const client = await subscriptionPool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [metaUserHash]);
+      const existing = await client.query(
+        `SELECT confirmation_code FROM public.solicitacoes_exclusao_meta
+         WHERE user_id_hash=$1 AND status IN ('recebida','em_analise')
+         ORDER BY solicitada_em DESC LIMIT 1 FOR UPDATE`,
+        [metaUserHash]
+      );
+      if (existing.rowCount) {
+        await client.query("COMMIT");
+        const code = existing.rows[0].confirmation_code;
+        return respondJson(response, 200, {
+          url: `${baseUrl}/api/meta/data-deletion/status?code=${code}`,
+          confirmation_code: code
+        });
+      }
+      const created = await client.query(
+        `INSERT INTO public.solicitacoes_exclusao_meta (confirmation_code,confirmation_code_hash,user_id_hash)
+         VALUES ($1,$2,$3) RETURNING id,status,solicitada_em`,
+        [confirmationCode, confirmationHash, metaUserHash]
+      );
+      await client.query(
+        `INSERT INTO public.historico_solicitacoes_exclusao_meta (solicitacao_id,status,observacao)
+         VALUES ($1,'recebida','Callback de exclusao recebido e assinatura validada pela Meta')`,
+        [created.rows[0].id]
+      );
+      await client.query("COMMIT");
+      return respondJson(response, 200, {
+        url: `${baseUrl}/api/meta/data-deletion/status?code=${confirmationCode}`,
+        confirmation_code: confirmationCode
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  if (pathname === "/api/meta/data-deletion/status" && request.method === "GET") {
+    if (!subscriptionPool) return respondJson(response, 503, { error: "Banco de dados indisponivel" });
+    const code = new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("code") || "";
+    if (!/^[a-f0-9]{32}$/.test(code)) return respondJson(response, 400, { error: "Protocolo invalido" });
+    const codeHash = crypto.createHash("sha256").update(code).digest("hex");
+    const result = await subscriptionPool.query(
+      "SELECT status FROM public.solicitacoes_exclusao_meta WHERE confirmation_code_hash=$1 LIMIT 1",
+      [codeHash]
+    );
+    if (!result.rowCount) return respondJson(response, 404, { error: "Protocolo nao encontrado" });
+    return renderMetaDeletionStatus(response, result.rows[0].status, code);
+  }
+
+  const adminCollection = "/api/admin/meta-data-deletion-requests";
+  const adminMatch = pathname.match(/^\/api\/admin\/meta-data-deletion-requests\/([0-9a-f-]{36})$/i);
+  if (pathname !== adminCollection && !adminMatch) return respondJson(response, 404, { error: "Rota nao encontrada" });
+  const auth = await requireAdmin(request);
+  if (auth.error) return respondJson(response, auth.status, { error: auth.error });
+  if (request.method === "GET" && pathname === adminCollection) {
+    const code = new URL(request.url, `http://${request.headers.host || "localhost"}`).searchParams.get("code") || "";
+    let result;
+    if (code) {
+      if (!/^[a-f0-9]{32}$/i.test(code)) return respondJson(response, 400, { error: "Protocolo invalido" });
+      const codeHash = crypto.createHash("sha256").update(code.toLowerCase()).digest("hex");
+      result = await subscriptionPool.query(
+        `SELECT r.id,r.status,r.solicitada_em,r.atualizada_em,r.concluida_em,r.observacao_admin,
+                COALESCE((SELECT json_agg(json_build_object(
+                  'status',h.status,'observacao',h.observacao,'ator_id',h.ator_id,'criado_em',h.criado_em
+                ) ORDER BY h.criado_em ASC) FROM public.historico_solicitacoes_exclusao_meta h
+                  WHERE h.solicitacao_id=r.id),'[]'::json) AS historico
+         FROM public.solicitacoes_exclusao_meta r WHERE r.confirmation_code_hash=$1`,
+        [codeHash]
+      );
+    } else {
+      result = await subscriptionPool.query(
+        `SELECT r.id,r.status,r.solicitada_em,r.atualizada_em,r.concluida_em,r.observacao_admin,
+                COALESCE((SELECT json_agg(json_build_object(
+                  'status',h.status,'observacao',h.observacao,'ator_id',h.ator_id,'criado_em',h.criado_em
+                ) ORDER BY h.criado_em ASC) FROM public.historico_solicitacoes_exclusao_meta h
+                  WHERE h.solicitacao_id=r.id),'[]'::json) AS historico
+         FROM public.solicitacoes_exclusao_meta r
+         ORDER BY r.solicitada_em DESC LIMIT 100`
+      );
+    }
+    return respondJson(response, 200, { solicitacoes: result.rows });
+  }
+  if (adminMatch && request.method === "PATCH") {
+    const body = await readRequestJson(request);
+    const status = String(body.status || "");
+    const observation = String(body.observacao || "").trim().slice(0, 1000) || null;
+    if (!["em_analise", "concluida", "sem_dados", "recusada"].includes(status)) {
+      return respondJson(response, 400, { error: "Status da solicitacao Meta invalido" });
+    }
+    const client = await subscriptionPool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(
+        "SELECT id,status FROM public.solicitacoes_exclusao_meta WHERE id=$1 FOR UPDATE",
+        [adminMatch[1]]
+      );
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return respondJson(response, 404, { error: "Solicitacao Meta nao encontrada" });
+      }
+      const isTerminal = ["concluida", "sem_dados", "recusada"].includes(current.rows[0].status);
+      if (isTerminal || (status === "em_analise" && current.rows[0].status !== "recebida") ||
+          (status !== "em_analise" && current.rows[0].status !== "em_analise")) {
+        await client.query("ROLLBACK");
+        return respondJson(response, 409, { error: "A solicitacao nao permite essa transicao de status" });
+      }
+      const updated = await client.query(
+        `UPDATE public.solicitacoes_exclusao_meta
+         SET status=$2,observacao_admin=$3,atualizada_em=NOW(),
+             concluida_em=CASE WHEN $2 IN ('concluida','sem_dados','recusada') THEN NOW() ELSE NULL END,
+             atualizada_por=$4
+         WHERE id=$1
+         RETURNING id,status,solicitada_em,atualizada_em,concluida_em,observacao_admin`,
+        [adminMatch[1], status, observation, auth.user.id]
+      );
+      await client.query(
+        `INSERT INTO public.historico_solicitacoes_exclusao_meta (solicitacao_id,status,observacao,ator_id)
+         VALUES ($1,$2,$3,$4)`,
+        [adminMatch[1], status, observation, auth.user.id]
+      );
+      await client.query("COMMIT");
+      return respondJson(response, 200, { solicitacao: updated.rows[0] });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  response.setHeader("Allow", pathname === adminCollection ? "GET" : "PATCH");
+  return respondJson(response, 405, { error: "Metodo nao permitido" });
+}
+
 async function routeDataDeletion(request, response, pathname) {
   if (!subscriptionPool) return respondJson(response, 503, { error: "Banco de dados indisponivel" });
 
@@ -1296,7 +1134,7 @@ async function processDueDataDeletions() {
       }
     }
   } catch (error) {
-    console.error("Rotina de exclusao indisponivel; confira se privacidade-exclusao.sql foi aplicado:", error.message);
+    console.error("Rotina de exclusao indisponivel; confira se sql/pedeia-consolidado.sql foi aplicado:", error.message);
   } finally {
     dataDeletionJobRunning = false;
   }
@@ -1372,6 +1210,17 @@ const server = http.createServer((request, response) => {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
   let pathname = url.pathname;
 
+  if (pathname === "/api/meta/data-deletion" ||
+      pathname === "/api/meta/data-deletion/status" ||
+      pathname === "/api/admin/meta-data-deletion-requests" ||
+      /^\/api\/admin\/meta-data-deletion-requests\/[0-9a-f-]{36}$/i.test(pathname)) {
+    routeMetaDataDeletion(request, response, pathname).catch(error => {
+      console.error("Falha no callback de exclusao de dados da Meta:", error.message);
+      if (!response.headersSent) respondJson(response, 500, { error: "Nao foi possivel processar a solicitacao da Meta" });
+    });
+    return;
+  }
+
   if (pathname === "/api/data-deletion-request" ||
       pathname === "/api/admin/data-deletion-requests" ||
       /^\/api\/admin\/data-deletion-requests\/[0-9a-f-]{36}$/i.test(pathname)) {
@@ -1383,25 +1232,6 @@ const server = http.createServer((request, response) => {
   }
   if (pathname === "/api/admin/support" || /^\/api\/admin\/support\/[0-9a-f-]{36}(?:\/messages)?$/i.test(pathname) || pathname === "/api/support" || /^\/api\/support\/[0-9a-f-]{36}\/messages$/i.test(pathname)) {
     routeSupport(request,response,pathname).catch(error=>{console.error("Falha no atendimento:",error.message);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel concluir o atendimento"});}); return;
-  }
-  if (pathname === "/api/whatsapp/webhook") {
-    handleWhatsAppWebhook(request, response).catch((error) => {
-      console.error("Falha no webhook do WhatsApp:", error.message);
-      if (!response.headersSent) respondJson(response, 500, { error: "Nao foi possivel processar o webhook do WhatsApp" });
-    });
-    return;
-  }
-  if (/^\/api\/merchant\/whatsapp(?:\/|$)/.test(pathname)) {
-    routeMerchantWhatsApp(request, response, pathname).catch((error) => {
-      console.error("Falha na integracao do WhatsApp:", error.message);
-      if (!response.headersSent) {
-        const isMetaError = error.code === "WHATSAPP_META_ERROR";
-        respondJson(response, isMetaError ? 502 : 500, {
-          error: isMetaError ? error.message : "Nao foi possivel concluir a operacao do WhatsApp"
-        });
-      }
-    });
-    return;
   }
   if (pathname === "/api/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -1441,16 +1271,16 @@ const server = http.createServer((request, response) => {
       const user=await authenticatedUser(request); if(!user)return respondJson(response,401,{error:"Sessao invalida"});
       if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});
       const r=await subscriptionPool.query("SELECT nome,whatsapp,ativo FROM public.pedeia_admin_contact WHERE ativo=true ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1");
-      return respondJson(response,200,{name:r.rows[0]?.nome||"",phone:r.rows[0]?.whatsapp||""});
+      return respondJson(response,200,{name:r.rows[0]?.nome||"",phone:normalizeAdminWhatsAppNumber(r.rows[0]?.whatsapp)||""});
     })().catch(e=>{console.error(e);if(!response.headersSent)respondJson(response,500,{error:"Nao foi possivel carregar o contato"});}); return;
   }
   if (pathname === "/api/admin/support-contact" && ["GET","PATCH"].includes(request.method)) {
     (async()=>{
       const auth=await requireAdmin(request); if(auth.error)return respondJson(response,auth.status,{error:auth.error});
       if(!subscriptionPool)return respondJson(response,503,{error:"Banco indisponivel"});
-      if(request.method==="GET") { const r=await subscriptionPool.query("SELECT nome,whatsapp,ativo FROM public.pedeia_admin_contact ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1"); return respondJson(response,200,{name:r.rows[0]?.nome||"",phone:r.rows[0]?.whatsapp||"",ativo:r.rows[0]?.ativo!==false}); }
-      const b=await readRequestJson(request), name=String(b.name||"").trim().slice(0,100), phone=String(b.phone||"").replace(/[^0-9+]/g,"").slice(0,30);
-      if(phone.replace(/\D/g,"").length<10)return respondJson(response,400,{error:"Informe um número de WhatsApp válido com DDD."});
+      if(request.method==="GET") { const r=await subscriptionPool.query("SELECT nome,whatsapp,ativo FROM public.pedeia_admin_contact ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1"); return respondJson(response,200,{name:r.rows[0]?.nome||"",phone:normalizeAdminWhatsAppNumber(r.rows[0]?.whatsapp)||"",ativo:r.rows[0]?.ativo!==false}); }
+      const b=await readRequestJson(request), name=String(b.name||"").trim().slice(0,100), phone=normalizeAdminWhatsAppNumber(b.phone);
+      if(!phone)return respondJson(response,400,{error:"Informe telefone com DDD: 10 ou 11 dígitos, com ou sem o código do país."});
       const existing=await subscriptionPool.query("SELECT id FROM public.pedeia_admin_contact ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1");
       let r;
       if(existing.rowCount){ r=await subscriptionPool.query(`UPDATE public.pedeia_admin_contact SET nome=$1,whatsapp=$2,ativo=true,updated_at=NOW() WHERE id=$3 RETURNING nome,whatsapp,ativo`,[name,phone,existing.rows[0].id]); }
@@ -2066,11 +1896,20 @@ const server = http.createServer((request, response) => {
   }
 
   const publicPages = {
-    "/privacidade": "/privacidade.html",
-    "/termos": "/termos.html",
-    "/exclusao-de-dados": "/exclusao-de-dados.html"
+    "/privacidade": "/pages/privacidade.html",
+    "/termos": "/pages/termos.html",
+    "/exclusao-de-dados": "/pages/exclusao-de-dados.html"
   };
-  const requestedPath = publicPages[pathname] || (pathname === "/" ? "/index.html" : pathname);
+  const publicFiles = {
+    "/app.js": "/js/app.js",
+    "/index.html": "/pages/index.html",
+    "/acompanhar.html": "/pages/acompanhar.html",
+    "/motoboy.html": "/pages/motoboy.html",
+    "/privacidade.html": "/pages/privacidade.html",
+    "/termos.html": "/pages/termos.html",
+    "/exclusao-de-dados.html": "/pages/exclusao-de-dados.html"
+  };
+  const requestedPath = publicPages[pathname] || publicFiles[pathname] || (pathname === "/" ? "/pages/index.html" : pathname);
   const filePath = path.resolve(root, `.${requestedPath}`);
   if (!filePath.startsWith(`${root}${path.sep}`)) {
     response.writeHead(403);
